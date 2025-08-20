@@ -9,8 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
-// import { ScrollArea } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
+// import type { Database } from '../types/database.types';
+import type { User } from '@supabase/supabase-js'; // Import Supabase User type
 import { 
   Search, 
   MapPin, 
@@ -24,7 +25,6 @@ import {
   RefreshCw,
   BookOpen
 } from 'lucide-react';
-// import type { Database } from '../types/database.types';
 import type { BookWithProfile, SearchFilters, LocationData } from '../types/database.types';
 
 export default function EnhancedBrowse() {
@@ -32,7 +32,10 @@ export default function EnhancedBrowse() {
   const [books, setBooks] = useState<BookWithProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [user, setUser] = useState(null);
+  
+  // Fix: Use Supabase User type instead of Database profile type
+  const [user, setUser] = useState<User | null>(null);
+  
   const [location, setLocation] = useState<LocationData | null>(null);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -53,7 +56,7 @@ export default function EnhancedBrowse() {
     board: '',
     negotiable: false
   });
-
+  
   // UI states
   const [showFilters, setShowFilters] = useState(false);
   const [sortBy, setSortBy] = useState<'distance' | 'price_low' | 'price_high' | 'newest'>('distance');
@@ -84,9 +87,9 @@ export default function EnhancedBrowse() {
         if (error) throw error;
         
         if (user) {
-          setUser(user);
+          setUser(user); // Now this works with correct type
           
-          // Get user profile and school info
+          // Get user profile separately
           const { data: profile } = await supabase
             .from('profiles')
             .select('*')
@@ -123,10 +126,9 @@ export default function EnhancedBrowse() {
         }
       } catch (error) {
         console.error('Error initializing app:', error);
-      }finally {
-      // ✅ End loading here
-      setLoading(false);
-    }
+      } finally {
+        setLoading(false);
+      }
     };
 
     initializeApp();
@@ -284,12 +286,12 @@ export default function EnhancedBrowse() {
         query = query.eq('condition', filters.condition);
       }
 
-      // Apply price range
-      if (filters.minPrice > 0) {
-        query = query.gte('price', filters.minPrice);
+      // Apply price range - use non-null assertion since we have defaults
+      if (filters.minPrice! > 0) {
+        query = query.gte('price', filters.minPrice!);
       }
-      if (filters.maxPrice < 10000) {
-        query = query.lte('price', filters.maxPrice);
+      if (filters.maxPrice! < 10000) {
+        query = query.lte('price', filters.maxPrice!);
       }
 
       // Apply negotiable filter
@@ -310,7 +312,7 @@ export default function EnhancedBrowse() {
           distance: book.lat && book.lng 
             ? calculateDistance(location.lat, location.lng, book.lat, book.lng)
             : 999
-        })).filter(book => book.distance <= filters.maxDistance);
+        })).filter(book => book.distance <= filters.maxDistance!); // Use non-null assertion
       }
 
       // Add favorites status
@@ -385,7 +387,6 @@ export default function EnhancedBrowse() {
     setBooks(prev => sortBooks(prev));
   };
 
-  // Toggle favorite
   const toggleFavorite = async (bookId: string, isFavorited: boolean | undefined) => {
     if (!user) {
       toast.error('Please sign in to add favorites');
@@ -470,7 +471,7 @@ export default function EnhancedBrowse() {
         {schoolName && (
           <div className="mt-2 flex items-center gap-2">
             <School className="h-4 w-4 text-blue-600" />
-            <span className="text-sm font-medium text-blue-600">🏫 {schoolName}</span>
+            <span className="text-sm font-medium text-blue-600">{schoolName}</span>
             <span className="text-xs text-muted-foreground">Books from your school will appear first</span>
           </div>
         )}
@@ -670,7 +671,7 @@ export default function EnhancedBrowse() {
                     Max Distance: {filters.maxDistance}km
                   </label>
                   <Slider
-                    value={[filters.maxDistance]}
+                    value={[filters.maxDistance || 25]}
                     onValueChange={(value) => handleFilterChange('maxDistance', value[0])}
                     max={100}
                     min={1}
@@ -812,7 +813,7 @@ export default function EnhancedBrowse() {
                   {book.school_name && book.school_name !== schoolName && (
                     <div className="flex items-center gap-1 text-xs text-blue-600">
                       <School className="h-3 w-3" />
-                      🏫 {book.school_name}
+                      {book.school_name}
                     </div>
                   )}
 

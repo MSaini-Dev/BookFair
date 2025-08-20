@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useNavigate } from 'react-router-dom';
-import { PencilIcon, TrashIcon, ChatBubbleLeftIcon, HeartIcon } from '@heroicons/react/24/outline';
+import { PencilIcon, TrashIcon, ChatBubbleLeftIcon} from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -141,13 +141,13 @@ export default function Dashboard() {
     }
   };
 
-  const removeFavorite = async (favoriteId: string, bookId: string) => {
-    await supabase
-      .from('favorites')
-      .delete()
-      .eq('id', favoriteId);
-    setFavorites(favorites.filter(fav => fav.id !== favoriteId));
-  };
+  // const removeFavorite = async (favoriteId: string, bookId: string) => {
+  //   await supabase
+  //     .from('favorites')
+  //     .delete()
+  //     .eq('id', favoriteId);
+  //   setFavorites(favorites.filter(fav => fav.id !== favoriteId));
+  // };
 
   if (loading) {
     return (

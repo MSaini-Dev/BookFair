@@ -179,11 +179,11 @@ export default function UltimateSell() {
       setUser(user);
 
       // Get user's profile with location
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
+      // const { data: profile } = await supabase
+      //   .from("profiles")
+      //   .select("*")
+      //   .eq("id", user.id)
+      //   .single();
 
       if (userLocation) {
         setForm((prev) => ({

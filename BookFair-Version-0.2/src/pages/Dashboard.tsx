@@ -254,51 +254,28 @@ export default function Dashboard() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {favorites.map((favorite) => (
-                <Card key={favorite.id} className="overflow-hidden">
-                  {favorite.books.image_url && (
-                    <div className="aspect-[3/4] overflow-hidden">
-                      <img
-                        src={favorite.books.image_url}
-                        alt={favorite.books.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                  )}
-                  <CardHeader className="pb-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <CardTitle className="text-lg">{favorite.books.title}</CardTitle>
-                        <p className="text-sm text-muted-foreground">by {favorite.books.author}</p>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => removeFavorite(favorite.id, favorite.books.id)}
-                      >
-                        <HeartIcon className="h-5 w-5 text-red-500 fill-current" />
-                      </Button>
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <Badge variant="secondary">{favorite.books.condition}</Badge>
-                      <Badge variant="outline">₹{favorite.books.price}</Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-sm text-muted-foreground mb-2">
-                      <p>By {favorite.books.profiles?.username || 'Unknown'}</p>
-                      <p>📍 {favorite.books.profiles?.location || 'Location not set'}</p>
-                    </div>
-                    <Button
-                      onClick={() => navigate(`/messages?book=${favorite.books.id}`)}
-                      className="w-full"
-                    >
-                      <ChatBubbleLeftIcon className="h-4 w-4 mr-2" />
-                      Message Seller
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
+{favorites.map((favorite) => (
+  <Card key={favorite.id} className="cursor-pointer hover:shadow-md transition-shadow">
+    <CardContent className="p-4">
+      {favorite.books?.image_url && (
+        <img
+          src={favorite.books.image_url}
+          alt={favorite.books.title}
+          className="w-full h-32 object-cover rounded mb-2"
+        />
+      )}
+      <h3 className="font-semibold mb-1">{favorite.books?.title}</h3>
+      <p className="text-sm text-muted-foreground mb-2">by {favorite.books?.author}</p>
+      <div className="text-sm text-muted-foreground">
+        By {favorite.books?.profiles?.username || 'Unknown'}
+      </div>
+      <div className="text-xs text-muted-foreground mt-1">
+        📍 {favorite.books?.profiles?.location || 'Location not set'}
+      </div>
+    </CardContent>
+  </Card>
+))}
+
             </div>
           )}
         </TabsContent>

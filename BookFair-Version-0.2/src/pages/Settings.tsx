@@ -16,74 +16,140 @@ export default function Settings() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
 
-  const applyTheme = (newTheme: 'light' | 'dark' | 'system') => {
-    const root = document.documentElement;
-    if (newTheme === 'dark' || (newTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      root.classList.add('dark');
-      root.setAttribute('data-theme', 'dark');
-    } else {
-      root.classList.remove('dark');
-      root.setAttribute('data-theme', 'light');
-    }
-  };
+// In Settings.tsx, fix the theme application logic:
+const applyTheme = (newTheme: 'light' | 'dark' | 'system') => {
+  const root = document.documentElement;
+  
+  if (newTheme === 'dark' || (newTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    root.classList.add('dark');
+    root.setAttribute('data-theme', 'dark');
+  } else {
+    root.classList.remove('dark');
+    root.setAttribute('data-theme', 'light');
+  }
+  
+  // Store theme in localStorage for persistence
+  localStorage.setItem('theme', newTheme);
+};
 
-  useEffect(() => {
-    const fetchUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+// Fix the useEffect for theme initialization:
+useEffect(() => {
+  const fetchUser = async () => {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error) throw error;
       if (!user) {
         navigate('/auth');
         return;
       }
+
       setUser(user);
 
-      const { data: profile } = await supabase
+      // Fetch or create profile
+      let { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', user.id)
         .single();
 
+      if (profileError && profileError.code === 'PGRST116') {
+        // Profile doesn't exist, create it
+        const newProfile = {
+          id: user.id,
+          username: user.email?.split('@')[0] || 'user',
+          theme: 'system' as const,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        const { data: createdProfile, error: createError } = await supabase
+          .from('profiles')
+          .insert([newProfile])
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        profile = createdProfile;
+      } else if (profileError) {
+        throw profileError;
+      }
+
       if (profile) {
-        const savedTheme = (localStorage.getItem('theme') as 'light' | 'dark' | 'system') || profile.theme as 'light' | 'dark' | 'system' || 'system';
         setProfile(profile);
+        
+        // Initialize theme from profile or localStorage
+        const savedTheme = profile.theme || localStorage.getItem('theme') as 'light' | 'dark' | 'system' || 'system';
         setTheme(savedTheme);
         applyTheme(savedTheme);
       }
+    } catch (error: any) {
+      console.error('Error fetching user:', error);
+      toast.error('Failed to load user settings');
+    } finally {
       setLoading(false);
-    };
-    fetchUser();
-  }, [navigate]);
+    }
+  };
+
+  fetchUser();
+}, [navigate]);
+
 
   const updateTheme = async (newTheme: 'light' | 'dark' | 'system') => {
-    setTheme(newTheme);
-    localStorage.setItem('theme', newTheme);
-    applyTheme(newTheme);
+    if (saving) return;
+    
+    setSaving(true);
+    try {
+      // Update UI immediately
+      setTheme(newTheme);
+      localStorage.setItem('theme', newTheme);
+      applyTheme(newTheme);
 
-    if (user) {
-      try {
+      if (user) {
         const { error } = await supabase
           .from('profiles')
           .upsert({
             id: user.id,
             theme: newTheme,
             updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'id'
           });
 
         if (error) throw error;
+        
+        // Update local profile state
+        setProfile(prev => prev ? { ...prev, theme: newTheme } : null);
         toast.success('Theme updated successfully!');
-      } catch (error: any) {
-        toast.error('Failed to save theme preference');
-        console.error('Error updating theme:', error);
       }
+    } catch (error: any) {
+      toast.error('Failed to save theme preference');
+      console.error('Error updating theme:', error);
+      
+      // Revert on error
+      const previousTheme = profile?.theme || 'system';
+      setTheme(previousTheme);
+      localStorage.setItem('theme', previousTheme);
+      applyTheme(previousTheme);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    navigate('/');
+    try {
+      await supabase.auth.signOut();
+      localStorage.clear(); // Clear all local storage
+      navigate('/');
+    } catch (error: any) {
+      toast.error('Error signing out');
+      console.error('Sign out error:', error);
+    }
   };
 
+  // Listen for system theme changes
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleChange = () => {
@@ -98,8 +164,10 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        </div>
       </div>
     );
   }
@@ -108,14 +176,16 @@ export default function Settings() {
     <div className="container mx-auto px-4 py-8">
       <div className="max-w-2xl mx-auto space-y-6">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Settings</h1>
+          <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-muted-foreground">Manage your account preferences and settings</p>
         </div>
 
         {/* Theme Settings */}
         <Card>
           <CardHeader>
-            <CardTitle>Appearance</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              Appearance
+            </CardTitle>
             <p className="text-sm text-muted-foreground">
               Choose your preferred theme. Current theme: <Badge variant="outline">{theme}</Badge>
             </p>
@@ -123,7 +193,7 @@ export default function Settings() {
           <CardContent>
             <div className="space-y-2">
               <label className="text-sm font-medium">Theme</label>
-              <Select value={theme} onValueChange={updateTheme}>
+              <Select value={theme} onValueChange={updateTheme} disabled={saving}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -144,25 +214,21 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Email</label>
-              <p className="font-medium">{user?.email}</p>
+              <label className="text-sm font-medium">Email</label>
+              <p className="text-sm text-muted-foreground">{user?.email}</p>
             </div>
-            
-            <Separator />
-            
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Username</label>
-              <p className="font-medium">{profile?.username || 'Not set'}</p>
+              <label className="text-sm font-medium">Username</label>
+              <p className="text-sm text-muted-foreground">{profile?.username || 'Not set'}</p>
             </div>
-            
-            <Separator />
-            
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Location</label>
-              <p className="font-medium">{profile?.location || 'Not set'}</p>
+              <label className="text-sm font-medium">Location</label>
+              <p className="text-sm text-muted-foreground">{profile?.location || 'Not set'}</p>
             </div>
           </CardContent>
         </Card>
+
+        <Separator />
 
         {/* Account Actions */}
         <Card>
@@ -170,7 +236,7 @@ export default function Settings() {
             <CardTitle>Account Actions</CardTitle>
           </CardHeader>
           <CardContent>
-            <Button onClick={handleSignOut} variant="destructive">
+            <Button variant="destructive" onClick={handleSignOut}>
               Sign Out
             </Button>
           </CardContent>

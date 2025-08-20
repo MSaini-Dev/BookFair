@@ -1,15 +1,15 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState} from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+// import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MapPin, Search, School, MapPinIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import 'leaflet/dist/leaflet.css';
-
+import { supabase } from '@/services/supabase';
 interface LocationData {
   lat: number;
   lng: number;
@@ -30,6 +30,7 @@ interface SchoolMatch {
   lat: number;
   lng: number;
 }
+
 
 interface EnhancedLocationPickerProps {
   onLocationSelect: (location: LocationData) => void;
@@ -59,133 +60,87 @@ export default function EnhancedLocationPicker({
   const [selectedSchool, setSelectedSchool] = useState<SchoolMatch | null>(null);
   const [showSchoolSelection, setShowSchoolSelection] = useState(false);
 
-  // Fuzzy string matching function
-  const fuzzyMatch = (str1: string, str2: string): number => {
-    const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
+  // // Fuzzy string matching function
+  // const fuzzyMatch = (str1: string, str2: string): number => {
+  //   const longer = str1.length > str2.length ? str1 : str2;
+  //   const shorter = str1.length > str2.length ? str2 : str1;
     
-    if (longer.length === 0) return 1.0;
+  //   if (longer.length === 0) return 1.0;
     
-    const editDistance = levenshteinDistance(longer.toLowerCase(), shorter.toLowerCase());
-    return (longer.length - editDistance) / longer.length;
-  };
+  //   const editDistance = levenshteinDistance(longer.toLowerCase(), shorter.toLowerCase());
+  //   return (longer.length - editDistance) / longer.length;
+  // };
 
-  const levenshteinDistance = (str1: string, str2: string): number => {
-    const matrix = [];
-    for (let i = 0; i <= str2.length; i++) {
-      matrix[i] = [i];
-    }
-    for (let j = 0; j <= str1.length; j++) {
-      matrix[0][j] = j;
-    }
-    for (let i = 1; i <= str2.length; i++) {
-      for (let j = 1; j <= str1.length; j++) {
-        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-          matrix[i][j] = matrix[i - 1][j - 1];
-        } else {
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j - 1] + 1,
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1
-          );
-        }
-      }
-    }
-    return matrix[str2.length][str1.length];
-  };
+  // const levenshteinDistance = (str1: string, str2: string): number => {
+  //   const matrix = [];
+  //   for (let i = 0; i <= str2.length; i++) {
+  //     matrix[i] = [i];
+  //   }
+  //   for (let j = 0; j <= str1.length; j++) {
+  //     matrix[0][j] = j;
+  //   }
+  //   for (let i = 1; i <= str2.length; i++) {
+  //     for (let j = 1; j <= str1.length; j++) {
+  //       if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+  //         matrix[i][j] = matrix[i - 1][j - 1];
+  //       } else {
+  //         matrix[i][j] = Math.min(
+  //           matrix[i - 1][j - 1] + 1,
+  //           matrix[i][j - 1] + 1,
+  //           matrix[i - 1][j] + 1
+  //         );
+  //       }
+  //     }
+  //   }
+  //   return matrix[str2.length][str1.length];
+  // };
+const searchSchools = async () => {
+  if (!searchQuery.trim()) return;
 
-  // Enhanced search for schools with location verification
-  const searchSchools = async () => {
-    if (!searchQuery.trim()) return;
-    
-    setIsSearching(true);
-    try {
-      // First get user's approximate location from search
-      const locationResponse = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery + ' ' + pincodeSearch)}&limit=5&countrycodes=IN`
-      );
-      const locationData = await locationResponse.json();
-      
-      if (locationData && locationData.length > 0) {
-        const userLat = parseFloat(locationData[0].lat);
-        const userLng = parseFloat(locationData.lon);
-        
-        // Mock school database search (replace with actual Supabase query)
-        const mockSchools = await findMatchingSchools(searchQuery, userLat, userLng, pincodeSearch, landmarkSearch);
-        setSchoolMatches(mockSchools);
-        setShowSchoolSelection(true);
-        
-        if (mockSchools.length > 0) {
-          setMapCenter({ lat: userLat, lng: userLng });
-        }
-      }
-    } catch (error) {
-      console.error('Error searching schools:', error);
-    } finally {
-      setIsSearching(false);
+  setIsSearching(true);
+  try {
+    let query = supabase
+      .from("school_clusters")
+      .select("id, school_name, lat, lng, area, pincode, landmarks")
+      .ilike("school_name", `%${searchQuery}%`);
+
+    if (pincodeSearch) {
+      query = query.eq("pincode", pincodeSearch);
     }
-  };
 
-  // Mock function - replace with actual Supabase query
-  const findMatchingSchools = async (
-    schoolName: string, 
-    userLat: number, 
-    userLng: number, 
-    pincode: string,
-    landmark: string
-  ): Promise<SchoolMatch[]> => {
-    // This would be replaced with actual Supabase query
-    const mockSchools: SchoolMatch[] = [
-      {
-        id: '1',
-        name: 'Kendriya Vidyalaya Sector 8',
-        distance: 0.2,
-        landmarks: ['DDA Market', 'Metro Station'],
-        pincode: '110022',
-        area: 'RK Puram',
-        confidence: 0.95,
-        lat: userLat + 0.001,
-        lng: userLng + 0.001
-      },
-      {
-        id: '2', 
-        name: 'Kendriya Vidyalaya RK Puram',
-        distance: 1.5,
-        landmarks: ['Ambedkar Park', 'Ring Road'],
-        pincode: '110022',
-        area: 'RK Puram Sector 8',
-        confidence: 0.85,
-        lat: userLat + 0.01,
-        lng: userLng + 0.01
-      },
-      {
-        id: '3',
-        name: 'Kendriya Vidyalaya Sector 8 AIIMS',
-        distance: 4.0,
-        landmarks: ['AIIMS Hospital', 'Safdarjung'],
-        pincode: '110029',
-        area: 'Safdarjung Enclave',
-        confidence: 0.75,
-        lat: userLat + 0.03,
-        lng: userLng + 0.03
-      }
-    ];
+    const { data, error } = await query.limit(20);
 
-    // Filter and score based on fuzzy matching
-    return mockSchools
-      .map(school => ({
-        ...school,
-        confidence: fuzzyMatch(schoolName, school.name)
-      }))
-      .filter(school => school.confidence > 0.6)
-      .sort((a, b) => {
-        // Sort by confidence first, then distance
-        if (Math.abs(a.confidence - b.confidence) > 0.1) {
-          return b.confidence - a.confidence;
-        }
-        return a.distance - b.distance;
-      });
-  };
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      const schools: SchoolMatch[] = data.map((s) => ({
+        id: s.id,
+        name: s.school_name,
+        lat: Number(s.lat),
+        lng: Number(s.lng),
+        area: s.area || "",
+        pincode: s.pincode || "",
+        landmarks: s.landmarks || [],
+        distance: 0,
+        confidence: 1,
+      }));
+
+      setSchoolMatches(schools);
+      setShowSchoolSelection(true);
+
+      setMapCenter({ lat: schools[0].lat, lng: schools[0].lng });
+    } else {
+      setSchoolMatches([]);
+      setShowSchoolSelection(false);
+    }
+  } catch (error) {
+    console.error("Error searching schools:", error);
+  } finally {
+    setIsSearching(false);
+  }
+};
+
+
 
   const handleSchoolSelect = (school: SchoolMatch) => {
     setSelectedSchool(school);
@@ -234,7 +189,7 @@ export default function EnhancedLocationPicker({
       );
       const data = await response.json();
       return data?.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-    } catch (error) {
+    } catch  {
       return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
     }
   };

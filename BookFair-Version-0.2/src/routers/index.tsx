@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import Home from "../pages/Home";
 import Browse from "../pages/EnhancedBrowse";
-import Sell from "../pages/Sell";
+import Sell from "../pages/UltimateSell";
 import Messages from "../pages/Messages";
 import Dashboard from "../pages/Dashboard";
 import Auth from "../components/Auth";

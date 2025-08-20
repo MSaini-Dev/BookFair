@@ -3,7 +3,7 @@ import { supabase } from '../services/supabase';
 import { useNavigate } from 'react-router-dom';
 import { PencilIcon, TrashIcon, ChatBubbleLeftIcon, HeartIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent,  CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { Database } from '../types/database.types';
@@ -65,16 +65,49 @@ export default function Dashboard() {
   };
 
   const fetchFavorites = async (userId: string) => {
-    const { data } = await supabase
-      .from('favorites')
-      .select(`
-        *,
-        books (*,
-          profiles:user_id (username, location)
-        )
-      `)
-      .eq('user_id', userId);
-    setFavorites(data as Favorite[] || []);
+    try {
+      // First approach: try the simpler query that's more likely to work
+      const { data: favoritesData, error: favoritesError } = await supabase
+        .from('favorites')
+        .select(`
+          *,
+          books (*)
+        `)
+        .eq('user_id', userId);
+  
+      if (favoritesError) {
+        throw favoritesError;
+      }
+  
+      if (!favoritesData || favoritesData.length === 0) {
+        setFavorites([]);
+        return;
+      }
+  
+      // Fetch profiles for each book separately
+      const favoritesWithProfiles = await Promise.all(
+        favoritesData.map(async (favorite: any) => {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('username, location')
+            .eq('id', favorite.books.user_id)
+            .single();
+          
+          return {
+            ...favorite,
+            books: {
+              ...favorite.books,
+              profiles: profile || { username: 'Unknown', location: 'Location not set' }
+            }
+          };
+        })
+      );
+      
+      setFavorites(favoritesWithProfiles as Favorite[]);
+    } catch (error) {
+      console.error('Error fetching favorites:', error);
+      setFavorites([]);
+    }
   };
 
   const deleteBook = async (bookId: string) => {

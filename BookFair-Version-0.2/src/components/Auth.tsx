@@ -66,7 +66,7 @@ export default function Auth() {
     setLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email: form.email,
           password: form.password,
           options: {
@@ -77,8 +77,15 @@ export default function Auth() {
             }
           }
         });
+        
         if (error) throw error;
-        setError("Check your email for verification link!");
+        
+        // Check if email confirmation is required
+        if (data.user && data.user.identities && data.user.identities.length === 0) {
+          setError("User already exists");
+        } else if (data.user) {
+          setError("Check your email for verification link!");
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: form.email,
@@ -89,6 +96,7 @@ export default function Auth() {
       }
     } catch (err: any) {
       setError(err.message);
+      console.error("Auth error:", err);
     } finally {
       setLoading(false);
     }
@@ -145,7 +153,7 @@ export default function Auth() {
                 </div>
 
                 {error && (
-                  <Alert variant={error.includes('Check your email') ? 'default' : 'destructive'}>
+                  <Alert variant={error.includes('Check your email') || error.includes('already exists') ? 'default' : 'destructive'}>
                     <AlertDescription>{error}</AlertDescription>
                   </Alert>
                 )}
@@ -216,7 +224,7 @@ export default function Auth() {
                 </div>
 
                 {error && (
-                  <Alert variant={error.includes('Check your email') ? 'default' : 'destructive'}>
+                  <Alert variant={error.includes('Check your email') || error.includes('already exists') ? 'default' : 'destructive'}>
                     <AlertDescription>{error}</AlertDescription>
                   </Alert>
                 )}

@@ -361,6 +361,10 @@ export default function UltimateSell() {
       toast.error("Please set your location");
       return;
     }
+      if (images.length === 0) {
+    toast.error("Please add at least one image");
+    return;
+  }
 
     setLoading(true);
 
@@ -441,7 +445,8 @@ export default function UltimateSell() {
       case 4:
         return !!(form.lat && form.lng);
       case 5:
-        return images.length > 0 // You can add validations for images if needed
+        console.log(images.length)
+        return images.length > 0; // You can add validations for images if needed
       default:
         return false; // 👈 prevents skipping
     }

@@ -166,7 +166,38 @@ export default function UltimateSell() {
       "Physical Education",
     ],
   };
+  useEffect(() => {
+    const initializeTheme = () => {
+      const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | 'system' || 'system';
+      const root = document.documentElement;
+      
+      if (savedTheme === 'dark' || (savedTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        root.classList.add('dark');
+        root.setAttribute('data-theme', 'dark');
+      } else {
+        root.classList.remove('dark');
+        root.setAttribute('data-theme', 'light');
+      }
+    };
 
+    // Initialize theme immediately
+    initializeTheme();
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = () => {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme === 'system') {
+        initializeTheme();
+      }
+    };
+
+    mediaQuery.addEventListener('change', handleSystemThemeChange);
+    
+    return () => {
+      mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    };
+  }, []);
   useEffect(() => {
     const checkUser = async () => {
       const {

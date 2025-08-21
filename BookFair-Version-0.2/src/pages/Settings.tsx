@@ -6,6 +6,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { 
+  AlertDialog, 
+  AlertDialogAction, 
+  AlertDialogCancel, 
+  AlertDialogContent, 
+  AlertDialogDescription, 
+  AlertDialogFooter, 
+  AlertDialogHeader, 
+  AlertDialogTitle, 
+  AlertDialogTrigger 
+} from '@/components/ui/alert-dialog';
 import toast from 'react-hot-toast';
 import type { Database } from '../types/database.types';
 
@@ -17,92 +29,105 @@ export default function Settings() {
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
 
-// In Settings.tsx, fix the theme application logic:
-const applyTheme = (newTheme: 'light' | 'dark' | 'system') => {
-  const root = document.documentElement;
-  
-  if (newTheme === 'dark' || (newTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-    root.classList.add('dark');
-    root.setAttribute('data-theme', 'dark');
-  } else {
-    root.classList.remove('dark');
-    root.setAttribute('data-theme', 'light');
-  }
-  
-  // Store theme in localStorage for persistence
-  localStorage.setItem('theme', newTheme);
-};
+  // Initialize theme on app load
+  const initializeTheme = () => {
+    // First check localStorage, then system preference
+    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | 'system' || 'system';
+    setTheme(savedTheme);
+    applyTheme(savedTheme);
+  };
 
-// Fix the useEffect for theme initialization:
-useEffect(() => {
-  const fetchUser = async () => {
-    try {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error) throw error;
-      if (!user) {
-        navigate('/auth');
-        return;
-      }
-
-      setUser(user);
-
-      // Fetch or create profile
-      let { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-      if (profileError && profileError.code === 'PGRST116') {
-        // Profile doesn't exist, create it
-        const newProfile = {
-          id: user.id,
-          username: user.email?.split('@')[0] || 'user',
-          theme: 'system' as const,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-
-        const { data: createdProfile, error: createError } = await supabase
-          .from('profiles')
-          .insert([newProfile])
-          .select()
-          .single();
-
-        if (createError) throw createError;
-        profile = createdProfile;
-      } else if (profileError) {
-        throw profileError;
-      }
-
-      if (profile) {
-        setProfile(profile);
-        
-        // Initialize theme from profile or localStorage
-        const savedTheme = profile.theme || localStorage.getItem('theme') as 'light' | 'dark' | 'system' || 'system';
-        setTheme(savedTheme);
-        applyTheme(savedTheme);
-      }
-    } catch (error: any) {
-      console.error('Error fetching user:', error);
-      toast.error('Failed to load user settings');
-    } finally {
-      setLoading(false);
+  const applyTheme = (newTheme: 'light' | 'dark' | 'system') => {
+    const root = document.documentElement;
+    
+    if (newTheme === 'dark' || (newTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+      root.classList.add('dark');
+      root.setAttribute('data-theme', 'dark');
+    } else {
+      root.classList.remove('dark');
+      root.setAttribute('data-theme', 'light');
     }
   };
 
-  fetchUser();
-}, [navigate]);
+  // Initialize theme immediately on component mount
+  useEffect(() => {
+    initializeTheme();
+  }, []);
 
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        if (!user) {
+          navigate('/auth');
+          return;
+        }
+
+        setUser(user);
+
+        // Fetch or create profile
+        let { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single();
+
+        if (profileError && profileError.code === 'PGRST116') {
+          // Profile doesn't exist, create it with current theme
+          const currentTheme = localStorage.getItem('theme') as 'light' | 'dark' | 'system' || 'system';
+          
+          const newProfile = {
+            id: user.id,
+            username: user.email?.split('@')[0] || 'user',
+            theme: currentTheme,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+
+          const { data: createdProfile, error: createError } = await supabase
+            .from('profiles')
+            .insert([newProfile])
+            .select()
+            .single();
+
+          if (createError) throw createError;
+          profile = createdProfile;
+        } else if (profileError) {
+          throw profileError;
+        }
+
+        if (profile) {
+          setProfile(profile);
+          
+          // Use profile theme if it exists, otherwise keep current localStorage theme
+          if (profile.theme) {
+            const profileTheme = profile.theme as 'light' | 'dark' | 'system';
+            setTheme(profileTheme);
+            localStorage.setItem('theme', profileTheme);
+            applyTheme(profileTheme);
+          }
+        }
+      } catch (error: any) {
+        console.error('Error fetching user:', error);
+        toast.error('Failed to load user settings');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchUser();
+  }, [navigate]);
 
   const updateTheme = async (newTheme: 'light' | 'dark' | 'system') => {
     if (saving) return;
     
     setSaving(true);
     try {
-      // Update UI immediately
+      // Update UI and localStorage immediately
       setTheme(newTheme);
       localStorage.setItem('theme', newTheme);
       applyTheme(newTheme);
@@ -112,6 +137,7 @@ useEffect(() => {
           .from('profiles')
           .upsert({
             id: user.id,
+            username: profile?.username || user.email?.split('@')[0] || 'user',
             theme: newTheme,
             updated_at: new Date().toISOString()
           }, {
@@ -129,7 +155,7 @@ useEffect(() => {
       console.error('Error updating theme:', error);
       
       // Revert on error
-      const previousTheme = profile?.theme || 'system';
+      const previousTheme = profile?.theme as 'light' | 'dark' | 'system' || 'system';
       setTheme(previousTheme);
       localStorage.setItem('theme', previousTheme);
       applyTheme(previousTheme);
@@ -140,12 +166,70 @@ useEffect(() => {
 
   const handleSignOut = async () => {
     try {
+      // Don't clear localStorage on sign out to preserve theme
       await supabase.auth.signOut();
-      localStorage.clear(); // Clear all local storage
       navigate('/');
     } catch (error: any) {
       toast.error('Error signing out');
       console.error('Sign out error:', error);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!user) return;
+
+    setDeleting(true);
+    try {
+      // Delete user's books first
+      const { error: booksError } = await supabase
+        .from('books')
+        .delete()
+        .eq('user_id', user.id);
+
+      if (booksError) {
+        console.error('Error deleting books:', booksError);
+        // Continue with account deletion even if books deletion fails
+      }
+
+      // Delete user's messages
+      const { error: messagesError } = await supabase
+        .from('messages')
+        .delete()
+        .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`);
+
+      if (messagesError) {
+        console.error('Error deleting messages:', messagesError);
+        // Continue with account deletion
+      }
+
+      // Delete profile
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', user.id);
+
+      if (profileError) {
+        console.error('Error deleting profile:', profileError);
+      }
+
+      // Delete the auth user (this is the most important step)
+      const { error: deleteError } = await supabase.auth.admin.deleteUser(user.id);
+      
+      if (deleteError) {
+        // If admin delete fails, try user delete
+        const { error: userDeleteError } = await supabase.auth.deleteUser();
+        if (userDeleteError) throw userDeleteError;
+      }
+
+      toast.success('Account deleted successfully');
+      localStorage.clear(); // Clear all data after successful deletion
+      navigate('/');
+      
+    } catch (error: any) {
+      toast.error('Failed to delete account. Please contact support.');
+      console.error('Error deleting account:', error);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -203,6 +287,9 @@ useEffect(() => {
                   <SelectItem value="system">System</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                System theme follows your device's dark mode preference
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -225,6 +312,12 @@ useEffect(() => {
               <label className="text-sm font-medium">Location</label>
               <p className="text-sm text-muted-foreground">{profile?.location || 'Not set'}</p>
             </div>
+            <div>
+              <label className="text-sm font-medium">Member since</label>
+              <p className="text-sm text-muted-foreground">
+                {profile?.created_at ? new Date(profile.created_at).toLocaleDateString() : 'Unknown'}
+              </p>
+            </div>
           </CardContent>
         </Card>
 
@@ -234,11 +327,56 @@ useEffect(() => {
         <Card>
           <CardHeader>
             <CardTitle>Account Actions</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Manage your account settings and data
+            </p>
           </CardHeader>
-          <CardContent>
-            <Button variant="destructive" onClick={handleSignOut}>
-              Sign Out
-            </Button>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <Button variant="outline" onClick={handleSignOut}>
+                Sign Out
+              </Button>
+              
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" disabled={deleting}>
+                    {deleting ? 'Deleting...' : 'Delete Account'}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                    <AlertDialogDescription className="space-y-2">
+                      <p>This action cannot be undone. This will permanently delete your account and remove all your data from our servers.</p>
+                      <p className="font-semibold">This includes:</p>
+                      <ul className="list-disc list-inside text-sm space-y-1 ml-4">
+                        <li>Your profile and account information</li>
+                        <li>All your listed books</li>
+                        <li>All your messages and conversations</li>
+                        <li>Your purchase and selling history</li>
+                      </ul>
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleDeleteAccount}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      disabled={deleting}
+                    >
+                      {deleting ? 'Deleting...' : 'Yes, delete my account'}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+
+            <Alert>
+              <AlertDescription className="text-xs">
+                <strong>Note:</strong> Signing out will preserve your theme preference. 
+                Deleting your account will permanently remove all your data and cannot be undone.
+              </AlertDescription>
+            </Alert>
           </CardContent>
         </Card>
       </div>

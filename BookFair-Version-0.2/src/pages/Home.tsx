@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import type{ Database } from '../types/database.types';
+import type { Database } from '../types/database.types';
 
 type Book = Database['public']['Tables']['books']['Row'] & {
   profiles?: {
@@ -17,6 +17,40 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [featuredBooks, setFeaturedBooks] = useState<Book[]>([]);
   const navigate = useNavigate();
+
+  // Initialize theme on app load
+  useEffect(() => {
+    const initializeTheme = () => {
+      const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | 'system' || 'system';
+      const root = document.documentElement;
+      
+      if (savedTheme === 'dark' || (savedTheme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        root.classList.add('dark');
+        root.setAttribute('data-theme', 'dark');
+      } else {
+        root.classList.remove('dark');
+        root.setAttribute('data-theme', 'light');
+      }
+    };
+
+    // Initialize theme immediately
+    initializeTheme();
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handleSystemThemeChange = () => {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme === 'system') {
+        initializeTheme();
+      }
+    };
+
+    mediaQuery.addEventListener('change', handleSystemThemeChange);
+    
+    return () => {
+      mediaQuery.removeEventListener('change', handleSystemThemeChange);
+    };
+  }, []);
 
   useEffect(() => {
     const checkUser = async () => {
@@ -40,7 +74,7 @@ export default function Home() {
   };
 
   const features = [
-    { icon: "🔍", title: "Easy Search", description: "Find books by title, author, or category with our powerful search" },
+    { icon: "📚", title: "Easy Search", description: "Find books by title, author, or category with our powerful search" },
     { icon: "💬", title: "Direct Messaging", description: "Chat directly with sellers to negotiate prices and arrange pickup" },
     { icon: "📍", title: "Local Sellers", description: "Find books near you and save on shipping costs" },
     { icon: "⭐", title: "Quality Ratings", description: "See book conditions and seller ratings before you buy" },

@@ -174,64 +174,43 @@ export default function Settings() {
       console.error('Sign out error:', error);
     }
   };
+const handleDeleteAccount = async () => {
+  if (!user) return;
 
-  const handleDeleteAccount = async () => {
-    if (!user) return;
+  setDeleting(true);
+  try {
+    // Delete user’s books
+    await supabase.from("books").delete().eq("user_id", user.id);
 
-    setDeleting(true);
-    try {
-      // Delete user's books first
-      const { error: booksError } = await supabase
-        .from('books')
-        .delete()
-        .eq('user_id', user.id);
+    // Delete user’s messages
+    await supabase
+      .from("messages")
+      .delete()
+      .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`);
 
-      if (booksError) {
-        console.error('Error deleting books:', booksError);
-        // Continue with account deletion even if books deletion fails
-      }
+    // Delete profile
+    await supabase.from("profiles").delete().eq("id", user.id);
 
-      // Delete user's messages
-      const { error: messagesError } = await supabase
-        .from('messages')
-        .delete()
-        .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`);
+    // Call backend route to delete the auth user
+    const response = await fetch("/api/delete-user", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: user.id }),
+    });
 
-      if (messagesError) {
-        console.error('Error deleting messages:', messagesError);
-        // Continue with account deletion
-      }
+    if (!response.ok) throw new Error("Failed to delete auth user");
 
-      // Delete profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', user.id);
+    toast.success("Account deleted successfully");
+    localStorage.clear();
+    navigate("/");
+  } catch (error: any) {
+    console.error("Error deleting account:", error);
+    toast.error("Failed to delete account. Please contact support.");
+  } finally {
+    setDeleting(false);
+  }
+};
 
-      if (profileError) {
-        console.error('Error deleting profile:', profileError);
-      }
-
-      // Delete the auth user (this is the most important step)
-      const { error: deleteError } = await supabase.auth.admin.deleteUser(user.id);
-      
-      if (deleteError) {
-        // If admin delete fails, try user delete
-        const { error: userDeleteError } = await supabase.auth.deleteUser();
-        if (userDeleteError) throw userDeleteError;
-      }
-
-      toast.success('Account deleted successfully');
-      localStorage.clear(); // Clear all data after successful deletion
-      navigate('/');
-      
-    } catch (error: any) {
-      toast.error('Failed to delete account. Please contact support.');
-      console.error('Error deleting account:', error);
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   // Listen for system theme changes
   useEffect(() => {

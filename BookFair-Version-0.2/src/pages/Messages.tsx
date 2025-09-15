@@ -143,64 +143,48 @@ export default function Messages() {
   }, [user]);
 
   // Setup real-time subscription - SIMPLIFIED AND FIXED
-  useEffect(() => {
-    if (!user) return;
+ useEffect(() => {
+  if (!user) return;
 
-    console.log('Setting up real-time subscription for user:', user.id);
+  console.log('Setting up real-time subscription for user:', user.id);
 
-    // Clean up any existing subscription
+  // Clean up existing subscription
+  if (subscriptionRef.current) {
+    supabase.removeChannel(subscriptionRef.current);
+    subscriptionRef.current = null;
+  }
+
+  const channel = supabase
+    .channel(`messages_for_${user.id}`)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'messages' },
+      async (payload) => {
+        const msg = payload.new as any;
+
+        // Only process messages involving the current user
+        if (msg.sender_id === user.id || msg.receiver_id === user.id) {
+          console.log('📩 New relevant message:', msg);
+          await handleNewMessage(msg);
+        }
+      }
+    )
+    .subscribe((status) => {
+      console.log('Subscription status:', status);
+      setIsConnected(status === 'SUBSCRIBED');
+    });
+
+  subscriptionRef.current = channel;
+
+  return () => {
     if (subscriptionRef.current) {
       supabase.removeChannel(subscriptionRef.current);
       subscriptionRef.current = null;
+      setIsConnected(false);
     }
+  };
+}, [user]);
 
-    // Create a targeted subscription that only listens to messages involving this user
-    const channelName = `user_messages_${user.id}`;
-    
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `sender_id=eq.${user.id}`
-        },
-        async (payload) => {
-          console.log('New message sent by user:', payload.new);
-          await handleNewMessage(payload.new as any);
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public", 
-          table: "messages",
-          filter: `receiver_id=eq.${user.id}`
-        },
-        async (payload) => {
-          console.log('New message received by user:', payload.new);
-          await handleNewMessage(payload.new as any);
-        }
-      )
-      .subscribe((status) => {
-        console.log('Subscription status:', status);
-        setIsConnected(status === 'SUBSCRIBED');
-      });
-
-    subscriptionRef.current = channel;
-
-    // Cleanup function
-    return () => {
-      if (subscriptionRef.current) {
-        supabase.removeChannel(subscriptionRef.current);
-        subscriptionRef.current = null;
-        setIsConnected(false);
-      }
-    };
-  }, [user]);
 
   // Handle new real-time messages
   const handleNewMessage = useCallback(async (newMsg: any) => {

@@ -180,18 +180,18 @@ export default function Messages() {
     }
   }, [user]);
 
-  // Fixed real-time subscription setup
-  const setupRealtimeSubscription = useCallback(async () => {
-    if (!selectedBook || !user) {
-      console.log("⚠️ Cannot setup subscription - missing selectedBook or user");
+  // FIXED: Global real-time subscription for all user messages
+  const setupGlobalRealtimeSubscription = useCallback(async () => {
+    if (!user) {
+      console.log("⚠️ Cannot setup global subscription - missing user");
       return;
     }
 
-    console.log(`🔄 Setting up real-time subscription for book: ${selectedBook}, user: ${user.id}`);
+    console.log(`🌍 Setting up GLOBAL real-time subscription for user: ${user.id}`);
 
     // Clean up any existing subscription
     if (subscriptionRef.current) {
-      console.log('🧹 Cleaning up previous subscription');
+      console.log('🧹 Cleaning up previous global subscription');
       await supabase.removeChannel(subscriptionRef.current);
       subscriptionRef.current = null;
       setIsConnected(false);
@@ -204,22 +204,21 @@ export default function Messages() {
     }
 
     try {
-      // Create new subscription with unique channel name
-      const channelName = `messages_book_${selectedBook}_user_${user.id}_${Date.now()}`;
-      console.log(`📡 Creating channel: ${channelName}`);
+      // Create new global subscription for all messages involving this user
+      const channelName = `user_messages_${user.id}_${Date.now()}`;
+      console.log(`📡 Creating global channel: ${channelName}`);
       
       const channel = supabase
         .channel(channelName)
         .on(
           "postgres_changes",
           {
-            event: "*", // Listen to all events (INSERT, UPDATE, DELETE)
+            event: "*",
             schema: "public",
-            table: "messages",
-            filter: `book_id=eq.${selectedBook}`
+            table: "messages"
           },
           async (payload) => {
-            console.log('🔥 REAL-TIME EVENT RECEIVED:', {
+            console.log('🔥 GLOBAL REAL-TIME EVENT RECEIVED:', {
               eventType: payload.eventType,
               table: payload.table,
               schema: payload.schema,
@@ -230,11 +229,11 @@ export default function Messages() {
             // Handle INSERT events (new messages)
             if (payload.eventType === 'INSERT') {
               const newMsg = payload.new as any;
-              console.log('📩 Processing new message:', newMsg);
+              console.log('📩 Processing new message from global subscription:', newMsg);
               
-              // Check if message involves current user
+              // Check if message involves current user (as sender OR receiver)
               const isForUser = newMsg.sender_id === user.id || newMsg.receiver_id === user.id;
-              console.log('👤 Message is for current user:', isForUser, {
+              console.log('👤 Message involves current user:', isForUser, {
                 newMsgSender: newMsg.sender_id,
                 newMsgReceiver: newMsg.receiver_id,
                 currentUser: user.id
@@ -264,43 +263,61 @@ export default function Messages() {
                   if (completeMessage) {
                     console.log('✅ Complete message fetched:', completeMessage);
                     
-                    // Add to messages (avoid duplicates)
-                    setMessages(prev => {
-                      console.log('📝 Current messages count before update:', prev.length);
-                      const exists = prev.some(msg => msg.id === completeMessage.id);
-                      console.log('🔍 Message already exists:', exists);
+                    // Only add to current messages if it's for the selected book
+                    if (selectedBook && completeMessage.book_id === selectedBook) {
+                      console.log('📱 Message is for currently selected book, adding to messages');
+                      setMessages(prev => {
+                        console.log('📝 Current messages count before update:', prev.length);
+                        const exists = prev.some(msg => msg.id === completeMessage.id);
+                        console.log('🔍 Message already exists:', exists);
+                        
+                        if (!exists) {
+                          const updated = [...prev, completeMessage];
+                          console.log('✅ Added new message to current conversation, total count:', updated.length);
+                          return updated;
+                        } else {
+                          console.log('⚠️ Message already exists in current messages, skipping');
+                        }
+                        return prev;
+                      });
+                    } else {
+                      console.log('📱 Message is not for currently selected book, skipping message list update');
+                    }
+
+                    // Always update conversations list regardless of selected book
+                    console.log('💬 Updating conversations list with new message');
+                    setConversations(prev => {
+                      console.log('📊 Current conversations count:', prev.length);
                       
-                      if (!exists) {
-                        const updated = [...prev, completeMessage];
-                        console.log('✅ Added new message, total count:', updated.length);
-                        return updated;
+                      // Find existing conversation for this book
+                      const existingIndex = prev.findIndex(conv => conv.book_id === completeMessage.book_id);
+                      
+                      if (existingIndex >= 0) {
+                        // Update existing conversation
+                        console.log('🔄 Updating existing conversation at index:', existingIndex);
+                        const updated = [...prev];
+                        updated[existingIndex] = { ...completeMessage };
+                        
+                        // Re-sort by timestamp (most recent first)
+                        const sorted = updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                        console.log('✅ Updated existing conversation and re-sorted');
+                        return sorted;
                       } else {
-                        console.log('⚠️ Message already exists, skipping');
+                        // Add new conversation
+                        console.log('➕ Adding new conversation for book:', completeMessage.book_id);
+                        const newConversations = [completeMessage, ...prev];
+                        const sorted = newConversations.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                        console.log('✅ Added new conversation and sorted, total count:', sorted.length);
+                        return sorted;
                       }
-                      return prev;
                     });
 
-                    // Update conversations list
-                    setConversations(prev => {
-                      console.log('💬 Updating conversations list');
-                      const updated = prev.map(conv => {
-                        if (conv.book_id === completeMessage.book_id) {
-                          console.log('🔄 Updated existing conversation for book:', completeMessage.book_id);
-                          return { ...completeMessage };
-                        }
-                        return conv;
-                      });
-                      
-                      const existingConv = prev.find(conv => conv.book_id === completeMessage.book_id);
-                      if (!existingConv) {
-                        console.log('➕ Added new conversation for book:', completeMessage.book_id);
-                        return [completeMessage, ...updated];
-                      }
-                      
-                      const sorted = updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-                      console.log('✅ Conversations updated and sorted');
-                      return sorted;
-                    });
+                    // Refresh conversations to ensure we have the latest data
+                    console.log('🔄 Refreshing conversations after new message');
+                    setTimeout(() => {
+                      fetchConversations();
+                    }, 1000);
+                    
                   } else {
                     console.log('⚠️ Complete message is null/undefined');
                   }
@@ -308,7 +325,7 @@ export default function Messages() {
                   console.error('❌ Error fetching complete message data:', error);
                 }
               } else {
-                console.log('⚠️ Message not for current user, ignoring');
+                console.log('⚠️ Message not involving current user, ignoring');
               }
             } else {
               console.log('📝 Non-INSERT event, ignoring:', payload.eventType);
@@ -316,15 +333,15 @@ export default function Messages() {
           }
         )
         .subscribe((status, err) => {
-          console.log(`📡 Subscription status changed: ${status}`, err);
+          console.log(`📡 Global subscription status changed: ${status}`, err);
           
           if (status === 'SUBSCRIBED') {
             setIsConnected(true);
             setReconnectAttempts(0);
-            console.log('✅ Real-time subscription is now ACTIVE');
+            console.log('✅ Global real-time subscription is now ACTIVE');
           } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
             setIsConnected(false);
-            console.log(`❌ Subscription ${status.toLowerCase()}`, err);
+            console.log(`❌ Global subscription ${status.toLowerCase()}`, err);
             
             // Implement exponential backoff for reconnection
             if (reconnectAttempts < maxReconnectAttempts) {
@@ -333,7 +350,7 @@ export default function Messages() {
               
               reconnectTimeoutRef.current = setTimeout(() => {
                 setReconnectAttempts(prev => prev + 1);
-                setupRealtimeSubscription();
+                setupGlobalRealtimeSubscription();
               }, delay);
             } else {
               console.log('❌ Max reconnection attempts reached');
@@ -343,27 +360,43 @@ export default function Messages() {
         });
 
       subscriptionRef.current = channel;
-      console.log('✅ Real-time subscription setup completed');
+      console.log('✅ Global real-time subscription setup completed');
       
     } catch (error) {
-      console.error('❌ Error setting up subscription:', error);
+      console.error('❌ Error setting up global subscription:', error);
       setError('Failed to establish real-time connection');
       setIsConnected(false);
     }
-  }, [selectedBook, user, reconnectAttempts]);
+  }, [user, reconnectAttempts, selectedBook, fetchConversations]);
 
-  // Effect for fetching messages and setting up subscription
+  // Setup global subscription when user is available
   useEffect(() => {
-    console.log('🔄 Messages effect triggered - selectedBook:', selectedBook, 'user:', user?.id);
-    
-    if (!selectedBook || !user) {
-      // Clean up subscription when no book selected
+    if (user) {
+      console.log('🌍 User available, setting up global real-time subscription');
+      setupGlobalRealtimeSubscription();
+    }
+
+    return () => {
+      console.log('🧹 Cleaning up global subscription');
       if (subscriptionRef.current) {
-        console.log('🧹 No book selected, cleaning up subscription');
         supabase.removeChannel(subscriptionRef.current);
         subscriptionRef.current = null;
         setIsConnected(false);
       }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+  }, [user]); // Only depend on user, not selectedBook
+
+  // Separate effect for fetching messages when selectedBook changes
+  useEffect(() => {
+    console.log('🔄 Selected book changed, fetching messages:', selectedBook);
+    
+    if (!selectedBook || !user) {
+      console.log('⚠️ No book selected or no user, clearing messages');
+      setMessages([]);
       return;
     }
 
@@ -389,13 +422,8 @@ export default function Messages() {
           throw error;
         }
 
-        console.log('✅ Messages fetched successfully:', messagesData?.length || 0);
-        console.log('📨 Messages data:', messagesData);
+        console.log('✅ Messages fetched successfully for selected book:', messagesData?.length || 0);
         setMessages(messagesData || []);
-        
-        // Set up real-time subscription after messages are loaded
-        console.log('🔄 Setting up real-time subscription after message fetch');
-        await setupRealtimeSubscription();
         
       } catch (error: any) {
         console.error('❌ Error in fetchMessages:', error);
@@ -406,22 +434,7 @@ export default function Messages() {
     };
 
     fetchMessages();
-
-    // Cleanup function
-    return () => {
-      console.log('🧹 Messages effect cleanup triggered');
-      if (subscriptionRef.current) {
-        console.log('🧹 Cleaning up subscription in useEffect cleanup');
-        supabase.removeChannel(subscriptionRef.current);
-        subscriptionRef.current = null;
-        setIsConnected(false);
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-    };
-  }, [selectedBook, user]); // Keep dependencies minimal
+  }, [selectedBook, user]);
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedBook || !user || sending) {
@@ -484,95 +497,34 @@ export default function Messages() {
         receiverId
       });
 
-      // Insert the message
-      const { data: newMessageData, error } = await supabase
+      // Insert the message (real-time subscription will handle the update)
+      const { error } = await supabase
         .from('messages')
         .insert([{
           message_text: messageText,
           book_id: selectedBook,
           sender_id: user.id,
           receiver_id: receiverId,
-        }])
-        .select(`
-          *,
-          books (title, user_id),
-          sender:profiles!messages_sender_id_fkey (username, avatar_url),
-          receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
-        `)
-        .single();
+        }]);
 
       if (error) {
         console.error('❌ Error inserting message:', error);
         throw error;
       }
 
-      console.log('✅ Message sent successfully to database:', newMessageData);
-
-      // Add message immediately to local state for instant feedback
-      if (newMessageData) {
-        console.log('➕ Adding message to local state immediately');
-        setMessages(prev => {
-          const exists = prev.some(msg => msg.id === newMessageData.id);
-          console.log('🔍 Message already exists in local state:', exists);
-          
-          if (!exists) {
-            const updated = [...prev, newMessageData];
-            console.log('✅ Message added to local state, total count:', updated.length);
-            return updated;
-          } else {
-            console.log('⚠️ Message already exists in local state');
-          }
-          return prev;
-        });
-
-        // Update conversations list immediately
-        console.log('💬 Updating conversations list immediately');
-        setConversations(prev => {
-          const updated = prev.map(conv => {
-            if (conv.book_id === newMessageData.book_id) {
-              console.log('🔄 Updated conversation for book:', newMessageData.book_id);
-              return { ...newMessageData };
-            }
-            return conv;
-          });
-          
-          const existingConv = prev.find(conv => conv.book_id === newMessageData.book_id);
-          if (!existingConv) {
-            console.log('➕ Added new conversation to list');
-            return [newMessageData, ...updated];
-          }
-          
-          const sorted = updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-          console.log('✅ Conversations list updated and sorted');
-          return sorted;
-        });
-      }
+      console.log('✅ Message sent successfully to database');
       
     } catch (error: any) {
       console.error("❌ Error sending message:", error);
       setError(error.message);
-      // setNewMessage(messageText);
+      // Restore the message text if there was an error
+      setNewMessage(messageText);
       console.log('🔄 Message text restored due to error');
     } finally {
       setSending(false);
       console.log('✅ Send message operation completed');
     }
   };
-
-  // Cleanup on component unmount
-  useEffect(() => {
-    return () => {
-      console.log('🧹 Component unmounting, cleaning up all subscriptions');
-      if (subscriptionRef.current) {
-        supabase.removeChannel(subscriptionRef.current);
-        subscriptionRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-    };
-  }, []);
 
   const getOtherParticipant = (conv: Conversation) => {
     if (!conv || !user) return "Unknown";

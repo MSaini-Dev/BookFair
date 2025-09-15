@@ -551,7 +551,6 @@ export default function Messages() {
     } catch (error: any) {
       console.error("❌ Error sending message:", error);
       setError(error.message);
-      // Restore the message text if there was an error
       // setNewMessage(messageText);
       console.log('🔄 Message text restored due to error');
     } finally {

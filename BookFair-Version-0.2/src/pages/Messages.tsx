@@ -1037,7 +1037,7 @@ export default function Messages() {
       console.error("Error sending message:", error);
       setError(error.message);
       // Restore the message text if there was an error
-      setNewMessage(messageText);
+      // setNewMessage(messageText);
     } finally {
       setSending(false);
     }

@@ -797,9 +797,9 @@ export default function Messages() {
 
   // Fixed real-time subscription setup
   const setupRealtimeSubscription = useCallback(async () => {
-    if (!user) return;
+    if (!selectedBook || !user) return;
 
-    console.log(`Setting up global subscription for user ${user.id}`);
+    console.log(`Setting up subscription for book ${selectedBook}`);
 
     // Clean up any existing subscription
     if (subscriptionRef.current) {
@@ -816,44 +816,47 @@ export default function Messages() {
     }
 
     try {
-      // Create new subscription with unique channel name for user
-      const channelName = `messages_user_${user.id}_${Date.now()}`;
+      // Create new subscription with unique channel name
+      const channelName = `messages_book_${selectedBook}_user_${user.id}_${Date.now()}`;
       
       const channel = supabase
         .channel(channelName)
         .on(
           "postgres_changes",
           {
-            event: "INSERT", // Only listen to new messages
+            event: "*", // Listen to all events (INSERT, UPDATE, DELETE)
             schema: "public",
             table: "messages",
-            // Filter for messages where user is sender OR receiver
-            filter: `or(sender_id.eq.${user.id},receiver_id.eq.${user.id})`
+            filter: `book_id=eq.${selectedBook}`
           },
           async (payload) => {
             console.log('Real-time message event:', payload.eventType, payload);
             
+            // Handle INSERT events (new messages)
             if (payload.eventType === 'INSERT') {
               const newMsg = payload.new as any;
               
-              try {
-                // Fetch complete message data with relations
-                const { data: completeMessage, error } = await supabase
-                  .from('messages')
-                  .select(`
-                    *,
-                    books (title, user_id),
-                    sender:profiles!messages_sender_id_fkey (username, avatar_url),
-                    receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
-                  `)
-                  .eq('id', newMsg.id)
-                  .single();
+              // Check if message involves current user
+              const isForUser = newMsg.sender_id === user.id || newMsg.receiver_id === user.id;
+              
+              if (isForUser) {
+                try {
+                  // Fetch complete message data with relations
+                  const { data: completeMessage, error } = await supabase
+                    .from('messages')
+                    .select(`
+                      *,
+                      books (title, user_id),
+                      sender:profiles!messages_sender_id_fkey (username, avatar_url),
+                      receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
+                    `)
+                    .eq('id', newMsg.id)
+                    .single();
 
-                if (completeMessage && !error) {
-                  console.log('Adding new message to state:', completeMessage);
-                  
-                  // Add to messages if viewing the same book
-                  if (selectedBook === completeMessage.book_id) {
+                  if (completeMessage && !error) {
+                    console.log('Adding new message to state:', completeMessage);
+                    
+                    // Add to messages (avoid duplicates)
                     setMessages(prev => {
                       const exists = prev.some(msg => msg.id === completeMessage.id);
                       if (!exists) {
@@ -863,27 +866,27 @@ export default function Messages() {
                       }
                       return prev;
                     });
-                  }
 
-                  // Update conversations list
-                  setConversations(prev => {
-                    const updated = prev.map(conv => {
-                      if (conv.book_id === completeMessage.book_id) {
-                        return { ...completeMessage };
+                    // Update conversations list
+                    setConversations(prev => {
+                      const updated = prev.map(conv => {
+                        if (conv.book_id === completeMessage.book_id) {
+                          return { ...completeMessage };
+                        }
+                        return conv;
+                      });
+                      
+                      const existingConv = prev.find(conv => conv.book_id === completeMessage.book_id);
+                      if (!existingConv) {
+                        return [completeMessage, ...updated];
                       }
-                      return conv;
+                      
+                      return updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
                     });
-                    
-                    const existingConv = prev.find(conv => conv.book_id === completeMessage.book_id);
-                    if (!existingConv) {
-                      return [completeMessage, ...updated];
-                    }
-                    
-                    return updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-                  });
+                  }
+                } catch (error) {
+                  console.error('Error fetching complete message data:', error);
                 }
-              } catch (error) {
-                console.error('Error fetching complete message data:', error);
               }
             }
           }
@@ -922,32 +925,18 @@ export default function Messages() {
       setError('Failed to establish real-time connection');
       setIsConnected(false);
     }
-  }, [user, reconnectAttempts, selectedBook]);
+  }, [selectedBook, user, reconnectAttempts]);
 
-  // Set up global subscription when user is available
+  // Effect for fetching messages and setting up subscription
   useEffect(() => {
-    if (user) {
-      setupRealtimeSubscription();
-    }
-
-    return () => {
+    if (!selectedBook || !user) {
+      // Clean up subscription when no book selected
       if (subscriptionRef.current) {
-        console.log('Cleaning up subscription in user effect');
+        console.log('No book selected, cleaning up subscription');
         supabase.removeChannel(subscriptionRef.current);
         subscriptionRef.current = null;
         setIsConnected(false);
       }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-    };
-  }, [user]); // Only depend on user, not setupRealtimeSubscription
-
-  // Separate effect for fetching messages when book selection changes
-  useEffect(() => {
-    if (!selectedBook || !user) {
-      setMessages([]);
       return;
     }
 
@@ -973,6 +962,9 @@ export default function Messages() {
         console.log('Fetched messages:', messagesData?.length || 0);
         setMessages(messagesData || []);
         
+        // Set up real-time subscription after messages are loaded
+        await setupRealtimeSubscription();
+        
       } catch (error: any) {
         console.error('Error fetching messages:', error);
         setError(`Failed to load messages: ${error.message}`);
@@ -982,7 +974,21 @@ export default function Messages() {
     };
 
     fetchMessages();
-  }, [selectedBook, user]);
+
+    // Cleanup function
+    return () => {
+      if (subscriptionRef.current) {
+        console.log('Cleaning up subscription in useEffect cleanup');
+        supabase.removeChannel(subscriptionRef.current);
+        subscriptionRef.current = null;
+        setIsConnected(false);
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+  }, [selectedBook, user]); // Keep dependencies minimal
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedBook || !user || sending) return;
@@ -1019,19 +1025,54 @@ export default function Messages() {
       console.log('Sending message:', messageText);
 
       // Insert the message
-      const { error } = await supabase
+      const { data: newMessageData, error } = await supabase
         .from('messages')
         .insert([{
           message_text: messageText,
           book_id: selectedBook,
           sender_id: user.id,
           receiver_id: receiverId,
-        }]);
+        }])
+        .select(`
+          *,
+          books (title, user_id),
+          sender:profiles!messages_sender_id_fkey (username, avatar_url),
+          receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
+        `)
+        .single();
 
       if (error) throw error;
 
-      console.log('Message sent successfully');
-      // Real-time subscription will handle adding the message to state
+      console.log('Message sent successfully:', newMessageData);
+
+      // The real-time subscription should handle adding the message to state
+      // But add it locally as backup for immediate feedback
+      if (newMessageData) {
+        setMessages(prev => {
+          const exists = prev.some(msg => msg.id === newMessageData.id);
+          if (!exists) {
+            return [...prev, newMessageData];
+          }
+          return prev;
+        });
+
+        // Update conversations list
+        setConversations(prev => {
+          const updated = prev.map(conv => {
+            if (conv.book_id === newMessageData.book_id) {
+              return { ...newMessageData };
+            }
+            return conv;
+          });
+          
+          const existingConv = prev.find(conv => conv.book_id === newMessageData.book_id);
+          if (!existingConv) {
+            return [newMessageData, ...updated];
+          }
+          
+          return updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        });
+      }
       
     } catch (error: any) {
       console.error("Error sending message:", error);
@@ -1148,7 +1189,7 @@ export default function Messages() {
                   : 'Select a conversation'
                 }
               </span>
-              {user && (
+              {selectedBook && (
                 <div className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${
                   isConnected ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
                 }`}>

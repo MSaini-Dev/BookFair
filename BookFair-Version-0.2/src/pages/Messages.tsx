@@ -26,11 +26,23 @@ export default function Messages() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const subscriptionRef = useRef<any>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const [isConnected, setIsConnected] = useState(false);
-  const userIdRef = useRef<string | null>(null);
+  
+  // Use refs to store current values for stable access in callbacks
+  const currentUserRef = useRef<any>(null);
+  const currentSelectedBookRef = useRef<string | null>(null);
+  const channelRef = useRef<any>(null);
+
+  // Update refs when state changes
+  useEffect(() => {
+    currentUserRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    currentSelectedBookRef.current = selectedBook;
+  }, [selectedBook]);
 
   // Scroll to bottom function
   const scrollToBottom = useCallback(() => {
@@ -73,8 +85,9 @@ export default function Messages() {
           navigate('/auth');
           return;
         }
+        
+        console.log('User authenticated:', user.id);
         setUser(user);
-        userIdRef.current = user.id; // Store user ID in ref for stable access
       } catch (error) {
         console.error("Error fetching user:", error);
         navigate('/auth');
@@ -95,7 +108,7 @@ export default function Messages() {
         .from('messages')
         .select(`
           *,
-          books (id, title, user_id),
+          books!messages_book_id_fkey (id, title, user_id),
           sender:profiles!messages_sender_id_fkey (username, avatar_url),
           receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
         `)
@@ -118,6 +131,7 @@ export default function Messages() {
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       setConversations(uniqueConversations);
+      console.log('Conversations loaded:', uniqueConversations.length);
     } catch (error: any) {
       console.error("Error fetching conversations:", error);
       setError(`Failed to load conversations: ${error.message}`);
@@ -144,172 +158,6 @@ export default function Messages() {
     }
   }, [user]);
 
-  // Handle new real-time messages - IMPROVED VERSION
-  const handleNewMessage = useCallback(async (newMsg: any) => {
-    const currentUserId = userIdRef.current;
-    if (!currentUserId) return;
-
-    // Only process messages involving the current user
-    if (newMsg.sender_id !== currentUserId && newMsg.receiver_id !== currentUserId) {
-      return;
-    }
-
-    console.log('📩 Processing new message:', newMsg);
-
-    try {
-      // Add a small delay to ensure the message is fully written to the database
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Fetch complete message data with relations
-      const { data: completeMessage, error } = await supabase
-        .from('messages')
-        .select(`
-          *,
-          books (title, user_id),
-          sender:profiles!messages_sender_id_fkey (username, avatar_url),
-          receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
-        `)
-        .eq('id', newMsg.id)
-        .single();
-
-      if (error || !completeMessage) {
-        console.error('Error fetching complete message:', error);
-        // Fallback: use the basic message data and fetch relations separately
-        const basicMessage = {
-          ...newMsg,
-          books: null,
-          sender: null,
-          receiver: null
-        };
-        
-        // Try to get book data
-        try {
-          const { data: bookData } = await supabase
-            .from('books')
-            .select('title, user_id')
-            .eq('id', newMsg.book_id)
-            .single();
-          
-          if (bookData) {
-            basicMessage.books = bookData;
-          }
-        } catch (bookError) {
-          console.error('Error fetching book data:', bookError);
-        }
-
-        // Try to get sender/receiver data
-        try {
-          const { data: senderData } = await supabase
-            .from('profiles')
-            .select('username, avatar_url')
-            .eq('id', newMsg.sender_id)
-            .single();
-          
-          const { data: receiverData } = await supabase
-            .from('profiles')
-            .select('username, avatar_url')
-            .eq('id', newMsg.receiver_id)
-            .single();
-
-          basicMessage.sender = senderData;
-          basicMessage.receiver = receiverData;
-        } catch (profileError) {
-          console.error('Error fetching profile data:', profileError);
-        }
-
-        completeMessage = basicMessage;
-      }
-
-      // Update messages if this message is for the currently selected book
-      setMessages(prev => {
-        const exists = prev.some(msg => msg.id === completeMessage.id);
-        if (!exists && selectedBook === completeMessage.book_id) {
-          const updated = [...prev, completeMessage].sort((a, b) => 
-            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          );
-          return updated;
-        }
-        return prev;
-      });
-
-      // Always update conversations
-      setConversations(prev => {
-        const existingIndex = prev.findIndex(conv => conv.book_id === completeMessage.book_id);
-        
-        if (existingIndex >= 0) {
-          const updated = [...prev];
-          updated[existingIndex] = { ...completeMessage };
-          return updated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        } else {
-          return [completeMessage, ...prev].sort((a, b) => 
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-          );
-        }
-      });
-    } catch (error) {
-      console.error('Error handling new message:', error);
-    }
-  }, [selectedBook]);
-
-  // Setup real-time subscription - FIXED AND IMPROVED
-  useEffect(() => {
-    if (!user?.id) return;
-
-    console.log('Setting up real-time subscription for user:', user.id);
-
-    // Clean up existing subscription
-    if (subscriptionRef.current) {
-      console.log('Cleaning up existing subscription');
-      supabase.removeChannel(subscriptionRef.current);
-      subscriptionRef.current = null;
-      setIsConnected(false);
-    }
-
-    const channelName = `messages_${user.id}_${Date.now()}`;
-    
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        'postgres_changes',
-        { 
-          event: 'INSERT', 
-          schema: 'public', 
-          table: 'messages',
-          // Filter to only listen for messages involving this user
-          filter: `or(sender_id.eq.${user.id},receiver_id.eq.${user.id})`
-        },
-        (payload) => {
-          console.log('📨 Real-time message received:', payload);
-          handleNewMessage(payload.new);
-        }
-      )
-      .subscribe((status, err) => {
-        console.log('Subscription status:', status, err);
-        setIsConnected(status === 'SUBSCRIBED');
-        
-        if (status === 'CHANNEL_ERROR') {
-          console.error('Channel error:', err);
-          setError('Real-time connection error. Messages may not update automatically.');
-        }
-        
-        if (status === 'TIMED_OUT') {
-          console.warn('Subscription timed out, attempting to reconnect...');
-        }
-      });
-
-    subscriptionRef.current = channel;
-
-    // Cleanup function
-    return () => {
-      if (subscriptionRef.current) {
-        console.log('Cleaning up subscription on unmount');
-        supabase.removeChannel(subscriptionRef.current);
-        subscriptionRef.current = null;
-        setIsConnected(false);
-      }
-    };
-  }, [user?.id, handleNewMessage]);
-
   // Fetch messages when selectedBook changes
   useEffect(() => {
     if (!selectedBook || !user) {
@@ -319,13 +167,14 @@ export default function Messages() {
 
     const fetchMessages = async () => {
       setLoading(true);
+      setError(null);
       
       try {        
         const { data: messagesData, error } = await supabase
           .from('messages')
           .select(`
             *,
-            books (title, user_id),
+            books!messages_book_id_fkey (title, user_id),
             sender:profiles!messages_sender_id_fkey (username, avatar_url),
             receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
           `)
@@ -335,6 +184,7 @@ export default function Messages() {
 
         if (error) throw error;
         setMessages(messagesData || []);
+        console.log('Messages loaded for book:', selectedBook, messagesData?.length || 0);
         
       } catch (error: any) {
         console.error('Error fetching messages:', error);
@@ -347,20 +197,166 @@ export default function Messages() {
     fetchMessages();
   }, [selectedBook, user]);
 
-  // Send message - IMPROVED ERROR HANDLING
+  // COMPLETELY REWRITTEN Real-time subscription
+  useEffect(() => {
+    if (!user?.id) {
+      console.log('No user, skipping real-time setup');
+      return;
+    }
+
+    console.log('🚀 Setting up real-time subscription for user:', user.id);
+
+    // Clean up any existing channel
+    if (channelRef.current) {
+      console.log('Removing existing channel');
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
+
+    // Create a unique channel name
+    const channelName = `messages-${user.id}-${Date.now()}`;
+    
+    // Create the channel
+    const channel = supabase.channel(channelName);
+
+    // Add the postgres changes listener
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages'
+      },
+      async (payload) => {
+        console.log('📨 Raw real-time payload:', payload);
+        
+        const newMsg = payload.new as any;
+        const currentUser = currentUserRef.current;
+        
+        if (!currentUser) {
+          console.log('No current user, ignoring message');
+          return;
+        }
+
+        // Check if message involves current user
+        if (newMsg.sender_id !== currentUser.id && newMsg.receiver_id !== currentUser.id) {
+          console.log('Message not for current user, ignoring');
+          return;
+        }
+
+        console.log('✅ Message is for current user, processing...');
+
+        try {
+          // Fetch the complete message with relations
+          const { data: completeMessage, error } = await supabase
+            .from('messages')
+            .select(`
+              *,
+              books!messages_book_id_fkey (title, user_id),
+              sender:profiles!messages_sender_id_fkey (username, avatar_url),
+              receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
+            `)
+            .eq('id', newMsg.id)
+            .single();
+
+          if (error) {
+            console.error('Error fetching complete message:', error);
+            return;
+          }
+
+          console.log('📬 Complete message fetched:', completeMessage);
+
+          // Update messages list if this is for the currently selected book
+          const currentBook = currentSelectedBookRef.current;
+          if (currentBook === completeMessage.book_id) {
+            console.log('Adding message to current conversation');
+            setMessages(prev => {
+              const exists = prev.some(msg => msg.id === completeMessage.id);
+              if (exists) {
+                console.log('Message already exists, skipping');
+                return prev;
+              }
+              
+              const updated = [...prev, completeMessage].sort((a, b) => 
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+              console.log('Messages updated, new count:', updated.length);
+              return updated;
+            });
+          }
+
+          // Always update conversations list
+          setConversations(prev => {
+            const existingIndex = prev.findIndex(conv => conv.book_id === completeMessage.book_id);
+            
+            if (existingIndex >= 0) {
+              // Update existing conversation
+              const updated = [...prev];
+              updated[existingIndex] = completeMessage;
+              return updated.sort((a, b) => 
+                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              );
+            } else {
+              // Add new conversation
+              return [completeMessage, ...prev].sort((a, b) => 
+                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              );
+            }
+          });
+
+        } catch (error) {
+          console.error('Error processing real-time message:', error);
+        }
+      }
+    );
+
+    // Subscribe to the channel
+    channel.subscribe((status, err) => {
+      console.log('📡 Subscription status:', status);
+      if (err) {
+        console.error('Subscription error:', err);
+      }
+      
+      setIsConnected(status === 'SUBSCRIBED');
+      
+      if (status === 'SUBSCRIBED') {
+        console.log('🎉 Real-time connected successfully!');
+      } else if (status === 'CHANNEL_ERROR') {
+        console.error('❌ Channel error:', err);
+        setError('Real-time connection failed');
+      }
+    });
+
+    // Store the channel reference
+    channelRef.current = channel;
+
+    // Cleanup function
+    return () => {
+      console.log('🧹 Cleaning up real-time subscription');
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+      setIsConnected(false);
+    };
+  }, [user?.id]); // Only depend on user.id
+
+  // Send message function
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedBook || !user || sending) {
+      console.log('Cannot send message - missing requirements');
       return;
     }
 
     setSending(true);
     setError(null);
     
-    // Store message text and clear input immediately for better UX
     const messageText = newMessage.trim();
-    setNewMessage("");
+    setNewMessage(""); // Clear input immediately
 
     try {
+      console.log('📤 Sending message...');
+      
       const conversation = conversations.find(c => c.book_id === selectedBook);
       let receiverId: string;
 
@@ -402,39 +398,12 @@ export default function Messages() {
 
       if (error) throw error;
       
-      console.log('Message sent successfully:', data);
-      
-      // The real-time subscription should handle the UI update
-      // But if it doesn't work within 2 seconds, manually refresh
-      const timeoutId = setTimeout(() => {
-        console.log('Real-time update timeout, manually refreshing...');
-        fetchConversations();
-        
-        if (selectedBook === data.book_id) {
-          // Manually add the message if real-time didn't work
-          setMessages(prev => {
-            const exists = prev.some(msg => msg.id === data.id);
-            if (!exists) {
-              return [...prev, {
-                ...data,
-                sender: { username: user.user_metadata?.username || 'You', avatar_url: user.user_metadata?.avatar_url },
-                receiver: null,
-                books: conversations.find(c => c.book_id === data.book_id)?.books || null
-              }].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            }
-            return prev;
-          });
-        }
-      }, 2000);
-
-      // Clear timeout if real-time update works
-      const clearTimeoutId = setTimeout(() => clearTimeout(timeoutId), 3000);
+      console.log('✅ Message sent successfully:', data);
       
     } catch (error: any) {
-      console.error("Error sending message:", error);
+      console.error("❌ Error sending message:", error);
       setError(error.message);
-      // Restore the message text if there was an error
-      setNewMessage(messageText);
+      setNewMessage(messageText); // Restore message on error
     } finally {
       setSending(false);
     }
@@ -458,6 +427,30 @@ export default function Messages() {
     }
   };
 
+  // Add a test button for debugging
+  const testRealtime = async () => {
+    if (!user) return;
+    
+    console.log('🧪 Testing real-time with manual message insert...');
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .insert([{
+          message_text: 'Test real-time message',
+          book_id: selectedBook || 'test-book-id',
+          sender_id: user.id,
+          receiver_id: user.id, // Send to self for testing
+        }])
+        .select()
+        .single();
+        
+      if (error) throw error;
+      console.log('Test message inserted:', data);
+    } catch (error) {
+      console.error('Test failed:', error);
+    }
+  };
+
   if (loading && !selectedBook) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -474,7 +467,18 @@ export default function Messages() {
         {/* Conversations List */}
         <Card className="md:col-span-1">
           <CardHeader>
-            <CardTitle>Conversations</CardTitle>
+            <CardTitle className="flex items-center justify-between">
+              Conversations
+              {/* Debug Info */}
+              <div className="text-xs">
+                <button 
+                  onClick={testRealtime}
+                  className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
+                >
+                  Test RT
+                </button>
+              </div>
+            </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="h-[500px]">
@@ -525,9 +529,9 @@ export default function Messages() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span>
-                {selectedBook
+                {selectedBook && messages.length > 0
                   ? messages[0]?.books?.title || 'Messages'
-                  : 'Select a conversation'
+                  : selectedBook ? 'Messages' : 'Select a conversation'
                 }
               </span>
               {selectedBook && (
@@ -564,19 +568,19 @@ export default function Messages() {
                       <div
                         key={message.id}
                         className={`flex ${
-                          message.sender_id === user.id ? 'justify-end' : 'justify-start'
+                          message.sender_id === user?.id ? 'justify-end' : 'justify-start'
                         }`}
                       >
                         <div
                           className={`max-w-[80%] p-3 rounded-lg ${
-                            message.sender_id === user.id 
+                            message.sender_id === user?.id 
                               ? 'bg-primary text-primary-foreground' 
                               : 'bg-muted'
                           }`}
                         >
                           <div className="text-sm">{message.message_text}</div>
                           <div className={`text-xs mt-1 ${
-                            message.sender_id === user.id 
+                            message.sender_id === user?.id 
                               ? 'text-primary-foreground/70' 
                               : 'text-muted-foreground'
                           }`}>

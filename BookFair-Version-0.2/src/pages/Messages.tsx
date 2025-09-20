@@ -282,9 +282,9 @@ export default function Messages() {
     );
 
     // Subscribe to the channel
-    channel.subscribe((status) => {
+    // channel.subscribe((status) => {
       // Silent subscription handling
-    });
+    // });
 
     // Store the channel reference
     channelRef.current = channel;

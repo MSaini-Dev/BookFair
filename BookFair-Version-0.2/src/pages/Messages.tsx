@@ -289,14 +289,14 @@ export default function Messages() {
           if (currentBook === completeMessage.book_id) {
             console.log('Adding message to current conversation');
             
-            setMessages(prev => {
+            setMessages(() => {
               // Use functional update to ensure we have latest state
               const currentMessages = messagesRef.current;
               const exists = currentMessages.some(msg => msg.id === completeMessage.id);
               
               if (exists) {
                 console.log('Message already exists, skipping');
-                return prev;
+                return currentMessages;
               }
               
               const updated = [...currentMessages, completeMessage].sort((a, b) => 
@@ -308,7 +308,7 @@ export default function Messages() {
           }
 
           // Always update conversations list
-          setConversations(prev => {
+          setConversations(() => {
             const currentConversations = conversationsRef.current;
             const existingIndex = currentConversations.findIndex(conv => conv.book_id === completeMessage.book_id);
             
@@ -415,6 +415,9 @@ export default function Messages() {
       book_id: selectedBook,
       sender_id: user.id,
       receiver_id: '', // Will be filled in below
+      message_type: 'text',
+      offer_amount: 0,
+      read_at: '',
       created_at: new Date().toISOString(),
       sender: {
         username: user.user_metadata?.username || user.email?.split('@')[0] || 'You',

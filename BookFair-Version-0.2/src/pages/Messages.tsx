@@ -30,6 +30,7 @@ export default function Messages() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const [isConnected, setIsConnected] = useState(false);
+  const userIdRef = useRef<string | null>(null);
 
   // Scroll to bottom function
   const scrollToBottom = useCallback(() => {
@@ -73,6 +74,7 @@ export default function Messages() {
           return;
         }
         setUser(user);
+        userIdRef.current = user.id; // Store user ID in ref for stable access
       } catch (error) {
         console.error("Error fetching user:", error);
         navigate('/auth');
@@ -142,53 +144,22 @@ export default function Messages() {
     }
   }, [user]);
 
-  // Setup real-time subscription - SIMPLIFIED AND FIXED
- useEffect(() => {
-  if (!user) return;
-
-  console.log('Setting up real-time subscription for user:', user.id);
-
-  // Clean up existing subscription
-  if (subscriptionRef.current) {
-    supabase.removeChannel(subscriptionRef.current);
-    subscriptionRef.current = null;
-  }
-
-  const channel = supabase
-    .channel(`messages_for_${user.id}`)
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'messages' },
-      async (payload) => {
-        const msg = payload.new as any;
-
-        // Only process messages involving the current user
-        if (msg.sender_id === user.id || msg.receiver_id === user.id) {
-          console.log('📩 New relevant message:', msg);
-          await handleNewMessage(msg);
-        }
-      }
-    )
-    .subscribe((status) => {
-      console.log('Subscription status:', status);
-      setIsConnected(status === 'SUBSCRIBED');
-    });
-
-  subscriptionRef.current = channel;
-
-  return () => {
-    if (subscriptionRef.current) {
-      supabase.removeChannel(subscriptionRef.current);
-      subscriptionRef.current = null;
-      setIsConnected(false);
-    }
-  };
-}, [user]);
-
-
-  // Handle new real-time messages
+  // Handle new real-time messages - IMPROVED VERSION
   const handleNewMessage = useCallback(async (newMsg: any) => {
+    const currentUserId = userIdRef.current;
+    if (!currentUserId) return;
+
+    // Only process messages involving the current user
+    if (newMsg.sender_id !== currentUserId && newMsg.receiver_id !== currentUserId) {
+      return;
+    }
+
+    console.log('📩 Processing new message:', newMsg);
+
     try {
+      // Add a small delay to ensure the message is fully written to the database
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // Fetch complete message data with relations
       const { data: completeMessage, error } = await supabase
         .from('messages')
@@ -203,21 +174,63 @@ export default function Messages() {
 
       if (error || !completeMessage) {
         console.error('Error fetching complete message:', error);
-        return;
+        // Fallback: use the basic message data and fetch relations separately
+        const basicMessage = {
+          ...newMsg,
+          books: null,
+          sender: null,
+          receiver: null
+        };
+        
+        // Try to get book data
+        try {
+          const { data: bookData } = await supabase
+            .from('books')
+            .select('title, user_id')
+            .eq('id', newMsg.book_id)
+            .single();
+          
+          if (bookData) {
+            basicMessage.books = bookData;
+          }
+        } catch (bookError) {
+          console.error('Error fetching book data:', bookError);
+        }
+
+        // Try to get sender/receiver data
+        try {
+          const { data: senderData } = await supabase
+            .from('profiles')
+            .select('username, avatar_url')
+            .eq('id', newMsg.sender_id)
+            .single();
+          
+          const { data: receiverData } = await supabase
+            .from('profiles')
+            .select('username, avatar_url')
+            .eq('id', newMsg.receiver_id)
+            .single();
+
+          basicMessage.sender = senderData;
+          basicMessage.receiver = receiverData;
+        } catch (profileError) {
+          console.error('Error fetching profile data:', profileError);
+        }
+
+        completeMessage = basicMessage;
       }
 
       // Update messages if this message is for the currently selected book
-      if (selectedBook && completeMessage.book_id === selectedBook) {
-        setMessages(prev => {
-          const exists = prev.some(msg => msg.id === completeMessage.id);
-          if (!exists) {
-            return [...prev, completeMessage].sort((a, b) => 
-              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-            );
-          }
-          return prev;
-        });
-      }
+      setMessages(prev => {
+        const exists = prev.some(msg => msg.id === completeMessage.id);
+        if (!exists && selectedBook === completeMessage.book_id) {
+          const updated = [...prev, completeMessage].sort((a, b) => 
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+          return updated;
+        }
+        return prev;
+      });
 
       // Always update conversations
       setConversations(prev => {
@@ -237,6 +250,65 @@ export default function Messages() {
       console.error('Error handling new message:', error);
     }
   }, [selectedBook]);
+
+  // Setup real-time subscription - FIXED AND IMPROVED
+  useEffect(() => {
+    if (!user?.id) return;
+
+    console.log('Setting up real-time subscription for user:', user.id);
+
+    // Clean up existing subscription
+    if (subscriptionRef.current) {
+      console.log('Cleaning up existing subscription');
+      supabase.removeChannel(subscriptionRef.current);
+      subscriptionRef.current = null;
+      setIsConnected(false);
+    }
+
+    const channelName = `messages_${user.id}_${Date.now()}`;
+    
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'messages',
+          // Filter to only listen for messages involving this user
+          filter: `or(sender_id.eq.${user.id},receiver_id.eq.${user.id})`
+        },
+        (payload) => {
+          console.log('📨 Real-time message received:', payload);
+          handleNewMessage(payload.new);
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Subscription status:', status, err);
+        setIsConnected(status === 'SUBSCRIBED');
+        
+        if (status === 'CHANNEL_ERROR') {
+          console.error('Channel error:', err);
+          setError('Real-time connection error. Messages may not update automatically.');
+        }
+        
+        if (status === 'TIMED_OUT') {
+          console.warn('Subscription timed out, attempting to reconnect...');
+        }
+      });
+
+    subscriptionRef.current = channel;
+
+    // Cleanup function
+    return () => {
+      if (subscriptionRef.current) {
+        console.log('Cleaning up subscription on unmount');
+        supabase.removeChannel(subscriptionRef.current);
+        subscriptionRef.current = null;
+        setIsConnected(false);
+      }
+    };
+  }, [user?.id, handleNewMessage]);
 
   // Fetch messages when selectedBook changes
   useEffect(() => {
@@ -275,7 +347,7 @@ export default function Messages() {
     fetchMessages();
   }, [selectedBook, user]);
 
-  // FIXED: Send message without immediate local state update
+  // Send message - IMPROVED ERROR HANDLING
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedBook || !user || sending) {
       return;
@@ -316,19 +388,47 @@ export default function Messages() {
           : conversation.sender_id;
       }
 
-      // Insert the message - let the real-time subscription handle the UI update
-      const { error } = await supabase
+      // Insert the message
+      const { data, error } = await supabase
         .from('messages')
         .insert([{
           message_text: messageText,
           book_id: selectedBook,
           sender_id: user.id,
           receiver_id: receiverId,
-        }]);
+        }])
+        .select()
+        .single();
 
       if (error) throw error;
       
-      console.log('Message sent successfully');
+      console.log('Message sent successfully:', data);
+      
+      // The real-time subscription should handle the UI update
+      // But if it doesn't work within 2 seconds, manually refresh
+      const timeoutId = setTimeout(() => {
+        console.log('Real-time update timeout, manually refreshing...');
+        fetchConversations();
+        
+        if (selectedBook === data.book_id) {
+          // Manually add the message if real-time didn't work
+          setMessages(prev => {
+            const exists = prev.some(msg => msg.id === data.id);
+            if (!exists) {
+              return [...prev, {
+                ...data,
+                sender: { username: user.user_metadata?.username || 'You', avatar_url: user.user_metadata?.avatar_url },
+                receiver: null,
+                books: conversations.find(c => c.book_id === data.book_id)?.books || null
+              }].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+            }
+            return prev;
+          });
+        }
+      }, 2000);
+
+      // Clear timeout if real-time update works
+      const clearTimeoutId = setTimeout(() => clearTimeout(timeoutId), 3000);
       
     } catch (error: any) {
       console.error("Error sending message:", error);
@@ -426,7 +526,7 @@ export default function Messages() {
             <CardTitle className="flex items-center justify-between">
               <span>
                 {selectedBook
-                  ? messages?.books?.title || 'Messages'
+                  ? messages[0]?.books?.title || 'Messages'
                   : 'Select a conversation'
                 }
               </span>

@@ -34,6 +34,8 @@ export default function Messages() {
   const currentUserRef = useRef<any>(null);
   const currentSelectedBookRef = useRef<string | null>(null);
   const channelRef = useRef<any>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const conversationsRef = useRef<Conversation[]>([]);
 
   // Update refs when state changes
   useEffect(() => {
@@ -43,6 +45,14 @@ export default function Messages() {
   useEffect(() => {
     currentSelectedBookRef.current = selectedBook;
   }, [selectedBook]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   // Scroll to bottom function
   const scrollToBottom = useCallback(() => {
@@ -197,7 +207,7 @@ export default function Messages() {
     fetchMessages();
   }, [selectedBook, user]);
 
-  // COMPLETELY REWRITTEN Real-time subscription
+  // Enhanced Real-time subscription with better error handling
   useEffect(() => {
     if (!user?.id) {
       console.log('No user, skipping real-time setup');
@@ -211,13 +221,18 @@ export default function Messages() {
       console.log('Removing existing channel');
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
+      setIsConnected(false);
     }
 
     // Create a unique channel name
     const channelName = `messages-${user.id}-${Date.now()}`;
     
     // Create the channel
-    const channel = supabase.channel(channelName);
+    const channel = supabase.channel(channelName, {
+      config: {
+        broadcast: { self: true }
+      }
+    });
 
     // Add the postgres changes listener
     channel.on(
@@ -247,6 +262,9 @@ export default function Messages() {
         console.log('✅ Message is for current user, processing...');
 
         try {
+          // Add a small delay to ensure the message is fully committed
+          await new Promise(resolve => setTimeout(resolve, 100));
+
           // Fetch the complete message with relations
           const { data: completeMessage, error } = await supabase
             .from('messages')
@@ -270,14 +288,18 @@ export default function Messages() {
           const currentBook = currentSelectedBookRef.current;
           if (currentBook === completeMessage.book_id) {
             console.log('Adding message to current conversation');
+            
             setMessages(prev => {
-              const exists = prev.some(msg => msg.id === completeMessage.id);
+              // Use functional update to ensure we have latest state
+              const currentMessages = messagesRef.current;
+              const exists = currentMessages.some(msg => msg.id === completeMessage.id);
+              
               if (exists) {
                 console.log('Message already exists, skipping');
                 return prev;
               }
               
-              const updated = [...prev, completeMessage].sort((a, b) => 
+              const updated = [...currentMessages, completeMessage].sort((a, b) => 
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
               );
               console.log('Messages updated, new count:', updated.length);
@@ -287,20 +309,25 @@ export default function Messages() {
 
           // Always update conversations list
           setConversations(prev => {
-            const existingIndex = prev.findIndex(conv => conv.book_id === completeMessage.book_id);
+            const currentConversations = conversationsRef.current;
+            const existingIndex = currentConversations.findIndex(conv => conv.book_id === completeMessage.book_id);
             
             if (existingIndex >= 0) {
               // Update existing conversation
-              const updated = [...prev];
+              const updated = [...currentConversations];
               updated[existingIndex] = completeMessage;
-              return updated.sort((a, b) => 
+              const sorted = updated.sort((a, b) => 
                 new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
               );
+              console.log('Updated existing conversation');
+              return sorted;
             } else {
               // Add new conversation
-              return [completeMessage, ...prev].sort((a, b) => 
+              const updated = [completeMessage, ...currentConversations].sort((a, b) => 
                 new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
               );
+              console.log('Added new conversation');
+              return updated;
             }
           });
 
@@ -310,22 +337,46 @@ export default function Messages() {
       }
     );
 
-    // Subscribe to the channel
-    channel.subscribe((status, err) => {
-      console.log('📡 Subscription status:', status);
-      if (err) {
-        console.error('Subscription error:', err);
-      }
-      
-      setIsConnected(status === 'SUBSCRIBED');
-      
-      if (status === 'SUBSCRIBED') {
-        console.log('🎉 Real-time connected successfully!');
-      } else if (status === 'CHANNEL_ERROR') {
-        console.error('❌ Channel error:', err);
-        setError('Real-time connection failed');
-      }
-    });
+    // Subscribe to the channel with retry logic
+    let retryCount = 0;
+    const maxRetries = 3;
+    
+    const subscribeWithRetry = () => {
+      channel.subscribe((status, err) => {
+        console.log('📡 Subscription status:', status, 'Retry:', retryCount);
+        
+        if (err) {
+          console.error('Subscription error:', err);
+        }
+        
+        setIsConnected(status === 'SUBSCRIBED');
+        
+        if (status === 'SUBSCRIBED') {
+          console.log('🎉 Real-time connected successfully!');
+          retryCount = 0; // Reset retry count on success
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error('❌ Channel error or timeout:', err);
+          
+          if (retryCount < maxRetries) {
+            retryCount++;
+            console.log(`Retrying connection... (${retryCount}/${maxRetries})`);
+            setTimeout(() => {
+              if (channelRef.current) {
+                supabase.removeChannel(channelRef.current);
+              }
+              subscribeWithRetry();
+            }, 2000 * retryCount); // Exponential backoff
+          } else {
+            setError('Real-time connection failed after multiple retries');
+          }
+        } else if (status === 'CLOSED') {
+          console.log('Channel closed');
+          setIsConnected(false);
+        }
+      });
+    };
+
+    subscribeWithRetry();
 
     // Store the channel reference
     channelRef.current = channel;
@@ -341,7 +392,7 @@ export default function Messages() {
     };
   }, [user?.id]); // Only depend on user.id
 
-  // Send message function
+  // Send message function with optimistic updates
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedBook || !user || sending) {
       console.log('Cannot send message - missing requirements');
@@ -352,7 +403,24 @@ export default function Messages() {
     setError(null);
     
     const messageText = newMessage.trim();
-    setNewMessage(""); // Clear input immediately
+    const tempId = `temp-${Date.now()}`;
+    
+    // Clear input immediately
+    setNewMessage("");
+
+    // Create optimistic message
+    const optimisticMessage: Message = {
+      id: tempId,
+      message_text: messageText,
+      book_id: selectedBook,
+      sender_id: user.id,
+      receiver_id: '', // Will be filled in below
+      created_at: new Date().toISOString(),
+      sender: {
+        username: user.user_metadata?.username || user.email?.split('@')[0] || 'You',
+        avatar_url: user.user_metadata?.avatar_url || ''
+      }
+    };
 
     try {
       console.log('📤 Sending message...');
@@ -377,11 +445,26 @@ export default function Messages() {
         if (receiverId === user.id) {
           throw new Error("You cannot message yourself");
         }
+        
+        // Add book info to optimistic message
+        optimisticMessage.books = {
+          title: bookData.title,
+          user_id: bookData.user_id
+        };
       } else {
         // Existing conversation - get other participant
         receiverId = conversation.sender_id === user.id
           ? conversation.receiver_id
           : conversation.sender_id;
+          
+        optimisticMessage.books = conversation.books;
+      }
+
+      optimisticMessage.receiver_id = receiverId;
+
+      // Add optimistic message to UI
+      if (selectedBook === currentSelectedBookRef.current) {
+        setMessages(prev => [...prev, optimisticMessage]);
       }
 
       // Insert the message
@@ -398,12 +481,18 @@ export default function Messages() {
 
       if (error) throw error;
       
+      // Remove optimistic message and let real-time handle the real one
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
+      
       console.log('✅ Message sent successfully:', data);
       
     } catch (error: any) {
       console.error("❌ Error sending message:", error);
       setError(error.message);
       setNewMessage(messageText); // Restore message on error
+      
+      // Remove optimistic message on error
+      setMessages(prev => prev.filter(msg => msg.id !== tempId));
     } finally {
       setSending(false);
     }
@@ -427,17 +516,21 @@ export default function Messages() {
     }
   };
 
-  // Add a test button for debugging
+  // Enhanced test function
   const testRealtime = async () => {
-    if (!user) return;
+    if (!user || !selectedBook) return;
     
     console.log('🧪 Testing real-time with manual message insert...');
+    console.log('Current book:', selectedBook);
+    console.log('User ID:', user.id);
+    console.log('Is connected:', isConnected);
+    
     try {
       const { data, error } = await supabase
         .from('messages')
         .insert([{
-          message_text: 'Test real-time message',
-          book_id: selectedBook || 'test-book-id',
+          message_text: `Test real-time message - ${new Date().toLocaleTimeString()}`,
+          book_id: selectedBook,
           sender_id: user.id,
           receiver_id: user.id, // Send to self for testing
         }])
@@ -470,13 +563,19 @@ export default function Messages() {
             <CardTitle className="flex items-center justify-between">
               Conversations
               {/* Debug Info */}
-              <div className="text-xs">
+              <div className="text-xs flex gap-1">
                 <button 
                   onClick={testRealtime}
                   className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
+                  disabled={!selectedBook}
                 >
                   Test RT
                 </button>
+                <div className={`px-2 py-1 rounded text-xs ${
+                  isConnected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                }`}>
+                  {isConnected ? '🟢' : '🔴'}
+                </div>
               </div>
             </CardTitle>
           </CardHeader>
@@ -576,6 +675,8 @@ export default function Messages() {
                             message.sender_id === user?.id 
                               ? 'bg-primary text-primary-foreground' 
                               : 'bg-muted'
+                          } ${
+                            message.id.startsWith('temp-') ? 'opacity-70' : ''
                           }`}
                         >
                           <div className="text-sm">{message.message_text}</div>
@@ -584,7 +685,10 @@ export default function Messages() {
                               ? 'text-primary-foreground/70' 
                               : 'text-muted-foreground'
                           }`}>
-                            {new Date(message.created_at).toLocaleTimeString()}
+                            {message.id.startsWith('temp-') 
+                              ? 'Sending...' 
+                              : new Date(message.created_at).toLocaleTimeString()
+                            }
                           </div>
                         </div>
                       </div>

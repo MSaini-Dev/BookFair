@@ -38,19 +38,16 @@ export default function Messages() {
   // Update refs when state changes
   useEffect(() => {
     currentUserRef.current = user;
-    console.log("🔁 User ref updated:", user?.id);
   }, [user]);
 
   useEffect(() => {
     currentSelectedBookRef.current = selectedBook;
-    console.log("🔁 Selected book ref updated:", selectedBook);
   }, [selectedBook]);
 
   // Scroll to bottom function
   const scrollToBottom = useCallback(() => {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-      console.log("⬇️ Scrolled to bottom");
     }
   }, []);
 
@@ -73,7 +70,6 @@ export default function Messages() {
 
   // Scroll when messages change
   useEffect(() => {
-    console.log("📝 Messages updated, scrolling to bottom. Count:", messages.length);
     const timeoutId = setTimeout(scrollToBottom, 100);
     return () => clearTimeout(timeoutId);
   }, [messages, scrollToBottom]);
@@ -82,20 +78,18 @@ export default function Messages() {
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        console.log("👤 Fetching user...");
         const { data: { user }, error } = await supabase.auth.getUser();
         if (error) throw error;
         
         if (!user) {
-          console.log("❌ No user found, redirecting to auth");
           navigate('/auth');
           return;
         }
         
-        console.log('✅ User authenticated:', user.id);
+        console.log('User authenticated:', user.id);
         setUser(user);
       } catch (error) {
-        console.error("❌ Error fetching user:", error);
+        console.error("Error fetching user:", error);
         navigate('/auth');
       }
     };
@@ -104,14 +98,10 @@ export default function Messages() {
 
   // Fetch conversations
   const fetchConversations = useCallback(async () => {
-    if (!user) {
-      console.log("❌ Cannot fetch conversations: No user");
-      return;
-    }
+    if (!user) return;
     
     setLoading(true);
     setError(null);
-    console.log("💬 Fetching conversations for user:", user.id);
     
     try {
       const { data: messagesData, error: messagesError } = await supabase
@@ -125,12 +115,7 @@ export default function Messages() {
         .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
         .order('created_at', { ascending: false });
 
-      if (messagesError) {
-        console.error("❌ Error fetching messages:", messagesError);
-        throw messagesError;
-      }
-
-      console.log("📨 Raw messages data:", messagesData);
+      if (messagesError) throw messagesError;
 
       // Group by book_id and get latest message for each conversation
       const conversationMap = new Map<string, Conversation>();
@@ -145,11 +130,10 @@ export default function Messages() {
       const uniqueConversations = Array.from(conversationMap.values())
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-      console.log("💭 Unique conversations:", uniqueConversations);
       setConversations(uniqueConversations);
-      console.log('✅ Conversations loaded:', uniqueConversations.length);
+      console.log('Conversations loaded:', uniqueConversations.length);
     } catch (error: any) {
-      console.error("❌ Error fetching conversations:", error);
+      console.error("Error fetching conversations:", error);
       setError(`Failed to load conversations: ${error.message}`);
     } finally {
       setLoading(false);
@@ -159,7 +143,6 @@ export default function Messages() {
   // Load conversations when user is available
   useEffect(() => {
     if (user) {
-      console.log("👤 User available, loading conversations");
       fetchConversations();
     }
   }, [user, fetchConversations]);
@@ -167,11 +150,9 @@ export default function Messages() {
   // Handle URL book parameter
   useEffect(() => {
     if (user) {
-      console.log("🔍 Checking URL for book parameter");
       const urlParams = new URLSearchParams(window.location.search);
       const bookId = urlParams.get('book');
       if (bookId) {
-        console.log("📚 Book ID from URL:", bookId);
         setSelectedBook(bookId);
       }
     }
@@ -180,7 +161,6 @@ export default function Messages() {
   // Fetch messages when selectedBook changes
   useEffect(() => {
     if (!selectedBook || !user) {
-      console.log("❌ Cannot fetch messages: No selected book or user");
       setMessages([]);
       return;
     }
@@ -188,7 +168,6 @@ export default function Messages() {
     const fetchMessages = async () => {
       setLoading(true);
       setError(null);
-      console.log("📩 Fetching messages for book:", selectedBook);
       
       try {        
         const { data: messagesData, error } = await supabase
@@ -203,17 +182,12 @@ export default function Messages() {
           .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
           .order('created_at', { ascending: true });
 
-        if (error) {
-          console.error("❌ Error fetching messages:", error);
-          throw error;
-        }
-        
-        console.log("📩 Messages data:", messagesData);
+        if (error) throw error;
         setMessages(messagesData || []);
-        console.log('✅ Messages loaded for book:', selectedBook, messagesData?.length || 0);
+        console.log('Messages loaded for book:', selectedBook, messagesData?.length || 0);
         
       } catch (error: any) {
-        console.error('❌ Error fetching messages:', error);
+        console.error('Error fetching messages:', error);
         setError(`Failed to load messages: ${error.message}`);
       } finally {
         setLoading(false);
@@ -223,25 +197,21 @@ export default function Messages() {
     fetchMessages();
   }, [selectedBook, user]);
 
-  // Real-time subscription
+  // COMPLETELY REWRITTEN Real-time subscription
   useEffect(() => {
     if (!user?.id) {
-      console.log('❌ No user ID, skipping real-time setup');
+      console.log('No user, skipping real-time setup');
       return;
     }
 
     console.log('🚀 Setting up real-time subscription for user:', user.id);
 
     // Clean up any existing channel
-    const cleanupExistingChannel = () => {
-      if (channelRef.current) {
-        console.log('🧹 Removing existing channel');
-        supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
-    };
-
-    cleanupExistingChannel();
+    if (channelRef.current) {
+      console.log('Removing existing channel');
+      supabase.removeChannel(channelRef.current);
+      channelRef.current = null;
+    }
 
     // Create a unique channel name
     const channelName = `messages-${user.id}-${Date.now()}`;
@@ -264,13 +234,13 @@ export default function Messages() {
         const currentUser = currentUserRef.current;
         
         if (!currentUser) {
-          console.log('❌ No current user, ignoring message');
+          console.log('No current user, ignoring message');
           return;
         }
 
         // Check if message involves current user
         if (newMsg.sender_id !== currentUser.id && newMsg.receiver_id !== currentUser.id) {
-          console.log('👤 Message not for current user, ignoring');
+          console.log('Message not for current user, ignoring');
           return;
         }
 
@@ -290,7 +260,7 @@ export default function Messages() {
             .single();
 
           if (error) {
-            console.error('❌ Error fetching complete message:', error);
+            console.error('Error fetching complete message:', error);
             return;
           }
 
@@ -299,22 +269,20 @@ export default function Messages() {
           // Update messages list if this is for the currently selected book
           const currentBook = currentSelectedBookRef.current;
           if (currentBook === completeMessage.book_id) {
-            console.log('💬 Adding message to current conversation');
+            console.log('Adding message to current conversation');
             setMessages(prev => {
               const exists = prev.some(msg => msg.id === completeMessage.id);
               if (exists) {
-                console.log('⚠️ Message already exists, skipping');
+                console.log('Message already exists, skipping');
                 return prev;
               }
               
               const updated = [...prev, completeMessage].sort((a, b) => 
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
               );
-              console.log('✅ Messages updated, new count:', updated.length);
+              console.log('Messages updated, new count:', updated.length);
               return updated;
             });
-          } else {
-            console.log('📚 Message is for a different book, not adding to current view');
           }
 
           // Always update conversations list
@@ -325,23 +293,19 @@ export default function Messages() {
               // Update existing conversation
               const updated = [...prev];
               updated[existingIndex] = completeMessage;
-              const sorted = updated.sort((a, b) => 
+              return updated.sort((a, b) => 
                 new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
               );
-              console.log('🔄 Updated existing conversation');
-              return sorted;
             } else {
               // Add new conversation
-              const updated = [completeMessage, ...prev].sort((a, b) => 
+              return [completeMessage, ...prev].sort((a, b) => 
                 new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
               );
-              console.log('🆕 Added new conversation');
-              return updated;
             }
           });
 
         } catch (error) {
-          console.error('❌ Error processing real-time message:', error);
+          console.error('Error processing real-time message:', error);
         }
       }
     );
@@ -350,7 +314,7 @@ export default function Messages() {
     channel.subscribe((status, err) => {
       console.log('📡 Subscription status:', status);
       if (err) {
-        console.error('❌ Subscription error:', err);
+        console.error('Subscription error:', err);
       }
       
       setIsConnected(status === 'SUBSCRIBED');
@@ -369,15 +333,18 @@ export default function Messages() {
     // Cleanup function
     return () => {
       console.log('🧹 Cleaning up real-time subscription');
-      cleanupExistingChannel();
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
       setIsConnected(false);
     };
-  }, [user?.id]);
+  }, [user?.id]); // Only depend on user.id
 
   // Send message function
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedBook || !user || sending) {
-      console.log('❌ Cannot send message - missing requirements');
+      console.log('Cannot send message - missing requirements');
       return;
     }
 
@@ -386,15 +353,15 @@ export default function Messages() {
     
     const messageText = newMessage.trim();
     setNewMessage(""); // Clear input immediately
-    console.log('📤 Sending message:', messageText);
 
-    try {      
+    try {
+      console.log('📤 Sending message...');
+      
       const conversation = conversations.find(c => c.book_id === selectedBook);
       let receiverId: string;
 
       if (!conversation) {
         // New conversation - get book owner
-        console.log('💬 Starting new conversation');
         const { data: bookData, error } = await supabase
           .from('books')
           .select('user_id, title')
@@ -410,15 +377,11 @@ export default function Messages() {
         if (receiverId === user.id) {
           throw new Error("You cannot message yourself");
         }
-        
-        console.log('📚 Book owner:', receiverId);
       } else {
         // Existing conversation - get other participant
-        console.log('💬 Existing conversation');
         receiverId = conversation.sender_id === user.id
           ? conversation.receiver_id
           : conversation.sender_id;
-        console.log('👤 Other participant:', receiverId);
       }
 
       // Insert the message
@@ -433,10 +396,7 @@ export default function Messages() {
         .select()
         .single();
 
-      if (error) {
-        console.error('❌ Error sending message:', error);
-        throw error;
-      }
+      if (error) throw error;
       
       console.log('✅ Message sent successfully:', data);
       
@@ -467,7 +427,7 @@ export default function Messages() {
     }
   };
 
-  // Test real-time functionality
+  // Add a test button for debugging
   const testRealtime = async () => {
     if (!user) return;
     
@@ -476,7 +436,7 @@ export default function Messages() {
       const { data, error } = await supabase
         .from('messages')
         .insert([{
-          message_text: 'Test real-time message ' + new Date().toLocaleTimeString(),
+          message_text: 'Test real-time message',
           book_id: selectedBook || 'test-book-id',
           sender_id: user.id,
           receiver_id: user.id, // Send to self for testing
@@ -485,16 +445,10 @@ export default function Messages() {
         .single();
         
       if (error) throw error;
-      console.log('✅ Test message inserted:', data);
+      console.log('Test message inserted:', data);
     } catch (error) {
-      console.error('❌ Test failed:', error);
+      console.error('Test failed:', error);
     }
-  };
-
-  // Refresh conversations manually
-  const refreshConversations = async () => {
-    console.log('🔄 Manually refreshing conversations');
-    await fetchConversations();
   };
 
   if (loading && !selectedBook) {
@@ -502,7 +456,6 @@ export default function Messages() {
       <div className="container mx-auto px-4 py-8">
         <div className="flex items-center justify-center">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <span className="ml-2">Loading...</span>
         </div>
       </div>
     );
@@ -516,20 +469,13 @@ export default function Messages() {
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               Conversations
-              <div className="flex gap-2">
+              {/* Debug Info */}
+              <div className="text-xs">
                 <button 
                   onClick={testRealtime}
                   className="px-2 py-1 bg-blue-500 text-white rounded text-xs"
-                  title="Test Real-time"
                 >
                   Test RT
-                </button>
-                <button 
-                  onClick={refreshConversations}
-                  className="px-2 py-1 bg-green-500 text-white rounded text-xs"
-                  title="Refresh Conversations"
-                >
-                  Refresh
                 </button>
               </div>
             </CardTitle>
@@ -559,10 +505,7 @@ export default function Messages() {
                           ? 'bg-primary/10 border border-primary/20'
                           : 'hover:bg-muted'
                       }`}
-                      onClick={() => {
-                        console.log("💬 Selecting conversation for book:", conv.book_id);
-                        setSelectedBook(conv.book_id);
-                      }}
+                      onClick={() => setSelectedBook(conv.book_id)}
                     >
                       <div className="font-medium text-sm">
                         {conv.books?.title || 'Unknown Book'}
@@ -572,9 +515,6 @@ export default function Messages() {
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 truncate">
                         {conv.message_text}
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {new Date(conv.created_at).toLocaleString()}
                       </div>
                     </div>
                   ))}
@@ -645,7 +585,6 @@ export default function Messages() {
                               : 'text-muted-foreground'
                           }`}>
                             {new Date(message.created_at).toLocaleTimeString()}
-                            {message.sender_id === user?.id ? ' (You)' : ` (${message.sender?.username || 'Unknown'})`}
                           </div>
                         </div>
                       </div>
@@ -655,7 +594,7 @@ export default function Messages() {
                 </div>
 
                 {error && (
-                  <Alert variant="destructive" className="mx-4 mb-2">
+                  <Alert className="mx-4 mb-2">
                     <AlertDescription>
                       {error}
                     </AlertDescription>
@@ -682,27 +621,6 @@ export default function Messages() {
           </CardContent>
         </Card>
       </div>
-      
-      {/* Debug Info Panel */}
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Debug Information</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <p><strong>User ID:</strong> {user?.id || 'Not authenticated'}</p>
-              <p><strong>Selected Book:</strong> {selectedBook || 'None'}</p>
-              <p><strong>Real-time Status:</strong> {isConnected ? 'Connected' : 'Disconnected'}</p>
-            </div>
-            <div>
-              <p><strong>Conversations:</strong> {conversations.length}</p>
-              <p><strong>Messages in View:</strong> {messages.length}</p>
-              <p><strong>Channel Active:</strong> {channelRef.current ? 'Yes' : 'No'}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

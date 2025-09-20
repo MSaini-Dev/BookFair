@@ -207,7 +207,7 @@ export default function Messages() {
     fetchMessages();
   }, [selectedBook, user]);
 
-  // Enhanced Real-time subscription with better error handling
+  // Enhanced Real-time subscription with broader filtering and polling fallback
   useEffect(() => {
     if (!user?.id) {
       console.log('No user, skipping real-time setup');
@@ -225,16 +225,17 @@ export default function Messages() {
     }
 
     // Create a unique channel name
-    const channelName = `messages-${user.id}-${Date.now()}`;
+    const channelName = `messages-realtime-${Date.now()}`;
     
-    // Create the channel
+    // Create the channel with specific config
     const channel = supabase.channel(channelName, {
       config: {
-        broadcast: { self: true }
+        broadcast: { self: true },
+        presence: { key: user.id }
       }
     });
 
-    // Add the postgres changes listener
+    // Listen for ALL message inserts, we'll filter client-side
     channel.on(
       'postgres_changes',
       {
@@ -243,7 +244,7 @@ export default function Messages() {
         table: 'messages'
       },
       async (payload) => {
-        console.log('📨 Raw real-time payload:', payload);
+        console.log('📨 Real-time INSERT payload received:', payload);
         
         const newMsg = payload.new as any;
         const currentUser = currentUserRef.current;
@@ -253,17 +254,19 @@ export default function Messages() {
           return;
         }
 
-        // Check if message involves current user
-        if (newMsg.sender_id !== currentUser.id && newMsg.receiver_id !== currentUser.id) {
-          console.log('Message not for current user, ignoring');
+        // Check if message involves current user (either sender or receiver)
+        const isForCurrentUser = newMsg.sender_id === currentUser.id || newMsg.receiver_id === currentUser.id;
+        
+        if (!isForCurrentUser) {
+          console.log('Message not for current user:', newMsg.sender_id, newMsg.receiver_id, 'vs', currentUser.id);
           return;
         }
 
-        console.log('✅ Message is for current user, processing...');
+        console.log('✅ Message is for current user, processing...', newMsg);
 
         try {
-          // Add a small delay to ensure the message is fully committed
-          await new Promise(resolve => setTimeout(resolve, 100));
+          // Wait a bit to ensure the message is fully committed with all relations
+          await new Promise(resolve => setTimeout(resolve, 200));
 
           // Fetch the complete message with relations
           const { data: completeMessage, error } = await supabase
@@ -286,12 +289,10 @@ export default function Messages() {
 
           // Update messages list if this is for the currently selected book
           const currentBook = currentSelectedBookRef.current;
-          if (currentBook === completeMessage.book_id) {
-            console.log('Adding message to current conversation');
+          if (currentBook && currentBook === completeMessage.book_id) {
+            console.log('Adding message to current conversation for book:', currentBook);
             
-            setMessages(() => {
-              // Use functional update to ensure we have latest state
-              const currentMessages = messagesRef.current;
+            setMessages(currentMessages => {
               const exists = currentMessages.some(msg => msg.id === completeMessage.id);
               
               if (exists) {
@@ -305,11 +306,12 @@ export default function Messages() {
               console.log('Messages updated, new count:', updated.length);
               return updated;
             });
+          } else {
+            console.log('Message not for current book:', currentBook, 'vs', completeMessage.book_id);
           }
 
           // Always update conversations list
-          setConversations(() => {
-            const currentConversations = conversationsRef.current;
+          setConversations(currentConversations => {
             const existingIndex = currentConversations.findIndex(conv => conv.book_id === completeMessage.book_id);
             
             if (existingIndex >= 0) {
@@ -337,60 +339,117 @@ export default function Messages() {
       }
     );
 
-    // Subscribe to the channel with retry logic
-    let retryCount = 0;
-    const maxRetries = 3;
-    
-    const subscribeWithRetry = () => {
-      channel.subscribe((status, err) => {
-        console.log('📡 Subscription status:', status, 'Retry:', retryCount);
+    // Also listen for UPDATE events (in case messages are updated)
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages'
+      },
+      async (payload) => {
+        console.log('📨 Real-time UPDATE payload received:', payload);
         
-        if (err) {
-          console.error('Subscription error:', err);
-        }
+        const updatedMsg = payload.new as any;
+        const currentUser = currentUserRef.current;
         
-        setIsConnected(status === 'SUBSCRIBED');
-        
-        if (status === 'SUBSCRIBED') {
-          console.log('🎉 Real-time connected successfully!');
-          retryCount = 0; // Reset retry count on success
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.error('❌ Channel error or timeout:', err);
-          
-          if (retryCount < maxRetries) {
-            retryCount++;
-            console.log(`Retrying connection... (${retryCount}/${maxRetries})`);
-            setTimeout(() => {
-              if (channelRef.current) {
-                supabase.removeChannel(channelRef.current);
-              }
-              subscribeWithRetry();
-            }, 2000 * retryCount); // Exponential backoff
-          } else {
-            setError('Real-time connection failed after multiple retries');
-          }
-        } else if (status === 'CLOSED') {
-          console.log('Channel closed');
-          setIsConnected(false);
-        }
-      });
-    };
+        if (!currentUser) return;
 
-    subscribeWithRetry();
+        const isForCurrentUser = updatedMsg.sender_id === currentUser.id || updatedMsg.receiver_id === currentUser.id;
+        if (!isForCurrentUser) return;
+
+        // Refresh conversations to get latest message states
+        fetchConversations();
+        
+        // If this message is in the current conversation, refresh messages
+        const currentBook = currentSelectedBookRef.current;
+        if (currentBook === updatedMsg.book_id) {
+          // Re-fetch messages for current book
+          try {
+            const { data: messagesData, error } = await supabase
+              .from('messages')
+              .select(`
+                *,
+                books!messages_book_id_fkey (title, user_id),
+                sender:profiles!messages_sender_id_fkey (username, avatar_url),
+                receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
+              `)
+              .eq('book_id', currentBook)
+              .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
+              .order('created_at', { ascending: true });
+
+            if (!error && messagesData) {
+              setMessages(messagesData);
+            }
+          } catch (error) {
+            console.error('Error refreshing messages after update:', error);
+          }
+        }
+      }
+    );
+
+    // Subscribe with simpler error handling
+    channel.subscribe((status, err) => {
+      console.log('📡 Subscription status:', status);
+      
+      if (err) {
+        console.error('Subscription error:', err);
+      }
+      
+      setIsConnected(status === 'SUBSCRIBED');
+      
+      if (status === 'SUBSCRIBED') {
+        console.log('🎉 Real-time connected successfully!');
+      } else if (status === 'CHANNEL_ERROR') {
+        console.error('❌ Channel error:', err);
+        setError('Real-time connection failed');
+      } else if (status === 'CLOSED') {
+        console.log('Channel closed');
+        setIsConnected(false);
+      }
+    });
 
     // Store the channel reference
     channelRef.current = channel;
 
+    // Polling fallback - check for new messages every 5 seconds if real-time fails
+    const pollInterval = setInterval(async () => {
+      if (!isConnected && user && selectedBook) {
+        console.log('🔄 Polling for new messages (real-time disconnected)');
+        try {
+          const { data: latestMessages, error } = await supabase
+            .from('messages')
+            .select(`
+              *,
+              books!messages_book_id_fkey (title, user_id),
+              sender:profiles!messages_sender_id_fkey (username, avatar_url),
+              receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
+            `)
+            .eq('book_id', selectedBook)
+            .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+            .order('created_at', { ascending: true });
+
+          if (!error && latestMessages && latestMessages.length !== messagesRef.current.length) {
+            console.log('📥 Found new messages via polling');
+            setMessages(latestMessages);
+          }
+        } catch (error) {
+          console.error('Polling error:', error);
+        }
+      }
+    }, 5000);
+
     // Cleanup function
     return () => {
       console.log('🧹 Cleaning up real-time subscription');
+      clearInterval(pollInterval);
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
       }
       setIsConnected(false);
     };
-  }, [user?.id]); // Only depend on user.id
+  }, [user?.id, isConnected, selectedBook, fetchConversations]); // Added dependencies
 
   // Send message function with optimistic updates
   const sendMessage = async () => {

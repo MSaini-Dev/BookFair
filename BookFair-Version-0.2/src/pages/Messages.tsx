@@ -390,21 +390,14 @@ export default function Messages() {
 
     // Subscribe with simpler error handling
     channel.subscribe((status, err) => {
-      console.log('📡 Subscription status:', status);
-      
-      if (err) {
-        console.error('Subscription error:', err);
-      }
-      
-      setIsConnected(status === 'SUBSCRIBED');
-      
       if (status === 'SUBSCRIBED') {
         console.log('🎉 Real-time connected successfully!');
+        setIsConnected(true);
+      } else if (status === 'CLOSED') {
+        setIsConnected(false);
       } else if (status === 'CHANNEL_ERROR') {
         console.error('❌ Channel error:', err);
         setError('Real-time connection failed');
-      } else if (status === 'CLOSED') {
-        console.log('Channel closed');
         setIsConnected(false);
       }
     });
@@ -412,32 +405,39 @@ export default function Messages() {
     // Store the channel reference
     channelRef.current = channel;
 
-    // Polling fallback - check for new messages every 5 seconds if real-time fails
+    // Polling fallback - check for new messages every 10 seconds as backup
     const pollInterval = setInterval(async () => {
-      if (!isConnected && user && selectedBook) {
-        console.log('🔄 Polling for new messages (real-time disconnected)');
-        try {
-          const { data: latestMessages, error } = await supabase
-            .from('messages')
-            .select(`
-              *,
-              books!messages_book_id_fkey (title, user_id),
-              sender:profiles!messages_sender_id_fkey (username, avatar_url),
-              receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
-            `)
-            .eq('book_id', selectedBook)
-            .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
-            .order('created_at', { ascending: true });
+      const currentUser = currentUserRef.current;
+      const currentBook = currentSelectedBookRef.current;
+      
+      if (!currentUser || !currentBook) {
+        return;
+      }
+      
+      try {
+        const { data: latestMessages, error } = await supabase
+          .from('messages')
+          .select(`
+            *,
+            books!messages_book_id_fkey (title, user_id),
+            sender:profiles!messages_sender_id_fkey (username, avatar_url),
+            receiver:profiles!messages_receiver_id_fkey (username, avatar_url)
+          `)
+          .eq('book_id', currentBook)
+          .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
+          .order('created_at', { ascending: true });
 
-          if (!error && latestMessages && latestMessages.length !== messagesRef.current.length) {
-            console.log('📥 Found new messages via polling');
+        if (!error && latestMessages) {
+          const currentMessages = messagesRef.current;
+          if (latestMessages.length > currentMessages.length) {
+            console.log('🔄 Found new messages via polling, updating...');
             setMessages(latestMessages);
           }
-        } catch (error) {
-          console.error('Polling error:', error);
         }
+      } catch (error) {
+        // Silently handle polling errors to avoid spam
       }
-    }, 5000);
+    }, 10000); // Poll every 10 seconds
 
     // Cleanup function
     return () => {
@@ -449,7 +449,7 @@ export default function Messages() {
       }
       setIsConnected(false);
     };
-  }, [user?.id, isConnected, selectedBook, fetchConversations]); // Added dependencies
+  }, [user?.id]); // Only depend on user.id to prevent infinite reconnections
 
   // Send message function with optimistic updates
   const sendMessage = async () => {
